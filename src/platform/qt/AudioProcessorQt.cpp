@@ -10,28 +10,32 @@
 
 #include <QAudioOutput>
 
-extern "C" {
-#include "core/thread.h"
-}
+#include <mgba/core/core.h>
+#include <mgba/core/thread.h>
 
 using namespace QGBA;
 
 AudioProcessorQt::AudioProcessorQt(QObject* parent)
 	: AudioProcessor(parent)
-	, m_audioOutput(nullptr)
-	, m_device(nullptr)
-	, m_sampleRate(44100)
 {
 }
 
-void AudioProcessorQt::setInput(mCoreThread* input) {
-	AudioProcessor::setInput(input);
+void AudioProcessorQt::setInput(std::shared_ptr<CoreController> controller) {
+	AudioProcessor::setInput(controller);
 	if (m_device) {
-		m_device->setInput(input);
+		m_device->setInput(input());
 		if (m_audioOutput) {
 			m_device->setFormat(m_audioOutput->format());
 		}
 	}
+}
+
+void AudioProcessorQt::stop() {
+	if (m_device) {
+		m_device.reset();
+	}
+	pause();
+	AudioProcessor::stop();
 }
 
 bool AudioProcessorQt::start() {
@@ -41,7 +45,7 @@ bool AudioProcessorQt::start() {
 	}
 
 	if (!m_device) {
-		m_device = new AudioDevice(this);
+		m_device = std::make_unique<AudioDevice>(this);
 	}
 
 	if (!m_audioOutput) {
@@ -50,7 +54,7 @@ bool AudioProcessorQt::start() {
 		format.setChannelCount(2);
 		format.setSampleSize(16);
 		format.setCodec("audio/pcm");
-		format.setByteOrder(QAudioFormat::LittleEndian);
+		format.setByteOrder(QAudioFormat::Endian(QSysInfo::ByteOrder));
 		format.setSampleType(QAudioFormat::SignedInt);
 
 		m_audioOutput = new QAudioOutput(format, this);
@@ -59,9 +63,8 @@ bool AudioProcessorQt::start() {
 
 	m_device->setInput(input());
 	m_device->setFormat(m_audioOutput->format());
-	m_audioOutput->setBufferSize(input()->core->getAudioBufferSize(input()->core) * 4);
 
-	m_audioOutput->start(m_device);
+	m_audioOutput->start(m_device.get());
 	return m_audioOutput->state() == QAudio::ActiveState;
 }
 
@@ -72,12 +75,6 @@ void AudioProcessorQt::pause() {
 }
 
 void AudioProcessorQt::setBufferSamples(int samples) {
-	AudioProcessor::setBufferSamples(samples);
-	if (m_audioOutput) {
-		m_audioOutput->stop();
-		m_audioOutput->setBufferSize(samples * 4);
-		m_audioOutput->start(m_device);
-	}
 }
 
 void AudioProcessorQt::inputParametersChanged() {

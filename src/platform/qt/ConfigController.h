@@ -3,8 +3,7 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#ifndef QGBA_CONFIG_CONTROLLER
-#define QGBA_CONFIG_CONTROLLER
+#pragma once
 
 #include "Override.h"
 
@@ -15,11 +14,9 @@
 
 #include <functional>
 
-extern "C" {
-#include "core/config.h"
-#include "util/configuration.h"
-#include "feature/commandline.h"
-}
+#include <mgba/core/config.h>
+#include <mgba-util/configuration.h>
+#include <mgba/feature/commandline.h>
 
 class QAction;
 class QMenu;
@@ -72,7 +69,8 @@ public:
 	ConfigOption* addOption(const char* key);
 	void updateOption(const char* key);
 
-	QString getOption(const char* key) const;
+	QString getOption(const char* key, const QVariant& defaultVal = QVariant()) const;
+	QString getOption(const QString& key, const QVariant& defaultVal = QVariant()) const;
 
 	QVariant getQtOption(const QString& key, const QString& group = QString()) const;
 
@@ -85,6 +83,8 @@ public:
 	Configuration* input() { return mCoreConfigGetInput(&m_config); }
 
 	const mCoreConfig* config() { return &m_config; }
+
+	static const QString& configDir();
 
 public slots:
 	void setOption(const char* key, bool value);
@@ -101,12 +101,11 @@ private:
 	Configuration* defaults() { return &m_config.defaultsTable; }
 
 	mCoreConfig m_config;
-	mCoreOptions m_opts;
+	mCoreOptions m_opts{};
 
 	QMap<QString, ConfigOption*> m_optionSet;
 	QSettings* m_settings;
+	static QString s_configDir;
 };
 
 }
-
-#endif

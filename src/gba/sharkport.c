@@ -3,10 +3,11 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#include "sharkport.h"
+#include <mgba/internal/gba/sharkport.h>
 
-#include "gba/gba.h"
-#include "util/vfs.h"
+#include <mgba/internal/arm/macros.h>
+#include <mgba/internal/gba/gba.h>
+#include <mgba-util/vfs.h>
 
 static const char* const SHARKPORT_HEADER = "SharkPortSave";
 
@@ -114,24 +115,14 @@ bool GBASavedataImportSharkPort(struct GBA* gba, struct VFile* vf, bool testChec
 
 	uint32_t copySize = size - 0x1C;
 	switch (gba->memory.savedata.type) {
-	case SAVEDATA_SRAM:
-		if (copySize > SIZE_CART_SRAM) {
-			copySize = SIZE_CART_SRAM;
-		}
-		break;
 	case SAVEDATA_FLASH512:
 		if (copySize > SIZE_CART_FLASH512) {
-			GBASavedataForceType(&gba->memory.savedata, SAVEDATA_FLASH1M, gba->memory.savedata.realisticTiming);
+			GBASavedataForceType(&gba->memory.savedata, SAVEDATA_FLASH1M);
 		}
 	// Fall through
-	case SAVEDATA_FLASH1M:
-		if (copySize > SIZE_CART_FLASH1M) {
-			copySize = SIZE_CART_FLASH1M;
-		}
-		break;
-	case SAVEDATA_EEPROM:
-		if (copySize > SIZE_CART_EEPROM) {
-			copySize = SAVEDATA_EEPROM;
+	default:
+		if (copySize > GBASavedataSize(&gba->memory.savedata)) {
+			copySize = GBASavedataSize(&gba->memory.savedata);
 		}
 		break;
 	case SAVEDATA_FORCE_NONE:
@@ -139,7 +130,21 @@ bool GBASavedataImportSharkPort(struct GBA* gba, struct VFile* vf, bool testChec
 		goto cleanup;
 	}
 
-	memcpy(gba->memory.savedata.data, &payload[0x1C], copySize);
+	if (gba->memory.savedata.type == SAVEDATA_EEPROM) {
+		size_t i;
+		for (i = 0; i < copySize; i += 8) {
+			uint32_t lo, hi;
+			LOAD_32BE(lo, i + 0x1C, payload);
+			LOAD_32BE(hi, i + 0x20, payload);
+			STORE_32LE(hi, i, gba->memory.savedata.data);
+			STORE_32LE(lo, i + 4, gba->memory.savedata.data);
+		}
+	} else {
+		memcpy(gba->memory.savedata.data, &payload[0x1C], copySize);
+	}
+	if (gba->memory.savedata.vf) {
+		gba->memory.savedata.vf->sync(gba->memory.savedata.vf, gba->memory.savedata.data, size);
+	}
 
 	free(payload);
 	return true;
@@ -154,7 +159,7 @@ bool GBASavedataExportSharkPort(const struct GBA* gba, struct VFile* vf) {
 		char c[0x1C];
 		int32_t i;
 	} buffer;
-	int32_t size = strlen(SHARKPORT_HEADER);
+	uint32_t size = strlen(SHARKPORT_HEADER);
 	STORE_32(size, 0, &buffer.i);
 	if (vf->write(vf, &buffer.i, 4) < 4) {
 		return false;
@@ -195,22 +200,8 @@ bool GBASavedataExportSharkPort(const struct GBA* gba, struct VFile* vf) {
 	}
 
 	// Write payload
-	size = 0x1C;
-	switch (gba->memory.savedata.type) {
-	case SAVEDATA_SRAM:
-		size += SIZE_CART_SRAM;
-		break;
-	case SAVEDATA_FLASH512:
-		size += SIZE_CART_FLASH512;
-		break;
-	case SAVEDATA_FLASH1M:
-		size += SIZE_CART_FLASH1M;
-		break;
-	case SAVEDATA_EEPROM:
-		size += SIZE_CART_EEPROM;
-		break;
-	case SAVEDATA_FORCE_NONE:
-	case SAVEDATA_AUTODETECT:
+	size = 0x1C + GBASavedataSize(&gba->memory.savedata);
+	if (size == 0x1C) {
 		return false;
 	}
 	STORE_32(size, 0, &buffer.i);
@@ -237,17 +228,24 @@ bool GBASavedataExportSharkPort(const struct GBA* gba, struct VFile* vf) {
 	}
 
 	uint32_t checksum = 0;
-	int i;
+	size_t i;
 	for (i = 0; i < 0x1C; ++i) {
 		checksum += buffer.c[i] << (checksum % 24);
 	}
 
-	if (vf->write(vf, gba->memory.savedata.data, size) < size) {
-		return false;
-	}
 
-	for (i = 0; i < size; ++i) {
-		checksum += ((char) gba->memory.savedata.data[i]) << (checksum % 24);
+	if (gba->memory.savedata.type == SAVEDATA_EEPROM) {
+		for (i = 0; i < size; ++i) {
+			char byte = gba->memory.savedata.data[i ^ 7];
+			checksum += byte << (checksum % 24);
+			vf->write(vf, &byte, 1);
+		}
+	} else if (vf->write(vf, gba->memory.savedata.data, size) < size) {
+		return false;
+	} else {
+		for (i = 0; i < size; ++i) {
+			checksum += ((char) gba->memory.savedata.data[i]) << (checksum % 24);
+		}
 	}
 
 	STORE_32(checksum, 0, &buffer.i);

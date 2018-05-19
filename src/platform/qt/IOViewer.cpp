@@ -5,19 +5,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "IOViewer.h"
 
-#include "GameController.h"
+#include "CoreController.h"
 
 #include <QComboBox>
 #include <QFontDatabase>
 #include <QGridLayout>
 #include <QSpinBox>
 
-extern "C" {
-#include "gba/io.h"
-}
+#include <mgba/internal/gba/io.h>
+#include <mgba/internal/gba/memory.h>
+
+struct ARMCore;
 
 using namespace QGBA;
-
 
 QList<IOViewer::RegisterDescription> IOViewer::s_registers;
 
@@ -1023,7 +1023,7 @@ const QList<IOViewer::RegisterDescription>& IOViewer::registerDescriptions() {
 	return s_registers;
 }
 
-IOViewer::IOViewer(GameController* controller, QWidget* parent)
+IOViewer::IOViewer(std::shared_ptr<CoreController> controller, QWidget* parent)
 	: QDialog(parent)
 	, m_controller(controller)
 {
@@ -1040,9 +1040,10 @@ IOViewer::IOViewer(GameController* controller, QWidget* parent)
 	const QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
 	m_ui.regValue->setFont(font);
 
-	connect(m_ui.buttonBox, SIGNAL(clicked(QAbstractButton*)), this, SLOT(buttonPressed(QAbstractButton*)));
-	connect(m_ui.buttonBox, SIGNAL(rejected()), this, SLOT(close()));
-	connect(m_ui.regSelect, SIGNAL(currentIndexChanged(int)), this, SLOT(selectRegister()));
+	connect(m_ui.buttonBox, &QDialogButtonBox::clicked, this, &IOViewer::buttonPressed);
+	connect(m_ui.buttonBox, &QDialogButtonBox::rejected, this, &QWidget::close);
+	connect(m_ui.regSelect, &QComboBox::currentTextChanged,
+	        this, static_cast<void (IOViewer::*)()>(&IOViewer::selectRegister));
 
 	m_b[0] = m_ui.b0;
 	m_b[1] = m_ui.b1;
@@ -1062,20 +1063,21 @@ IOViewer::IOViewer(GameController* controller, QWidget* parent)
 	m_b[15] = m_ui.bF;
 
 	for (int i = 0; i < 16; ++i) {
-		connect(m_b[i], SIGNAL(toggled(bool)), this, SLOT(bitFlipped()));
+		connect(m_b[i], &QAbstractButton::toggled, this, &IOViewer::bitFlipped);
 	}
 
 	selectRegister(0);
+
+	connect(controller.get(), &CoreController::stopping, this, &QWidget::close);
 }
 
 void IOViewer::updateRegister() {
 	m_value = 0;
 	uint16_t value = 0;
-	m_controller->threadInterrupt();
-	if (m_controller->isLoaded()) {
+	{
+		CoreController::Interrupter interrupter(m_controller);
 		value = GBAView16(static_cast<ARMCore*>(m_controller->thread()->core->cpu), BASE_IO | m_register);
 	}
-	m_controller->threadContinue();
 
 	for (int i = 0; i < 16; ++i) {
 		m_b[i]->setChecked(value & (1 << i) ? Qt::Checked : Qt::Unchecked);
@@ -1094,11 +1096,10 @@ void IOViewer::bitFlipped() {
 }
 
 void IOViewer::writeback() {
-	m_controller->threadInterrupt();
-	if (m_controller->isLoaded()) {
+	{
+		CoreController::Interrupter interrupter(m_controller);
 		GBAIOWrite(static_cast<GBA*>(m_controller->thread()->core->board), m_register, m_value);
 	}
-	m_controller->threadContinue();
 	updateRegister();
 }
 
@@ -1128,8 +1129,8 @@ void IOViewer::selectRegister(unsigned address) {
 				QCheckBox* check = new QCheckBox;
 				check->setEnabled(!ri.readonly);
 				box->addWidget(check, i, 1, Qt::AlignRight);
-				connect(check, SIGNAL(toggled(bool)), m_b[ri.start], SLOT(setChecked(bool)));
-				connect(m_b[ri.start], SIGNAL(toggled(bool)), check, SLOT(setChecked(bool)));
+				connect(check, &QAbstractButton::toggled, m_b[ri.start], &QAbstractButton::setChecked);
+				connect(m_b[ri.start], &QAbstractButton::toggled, check, &QAbstractButton::setChecked);
 			} else if (ri.items.empty()) {
 				QSpinBox* sbox = new QSpinBox;
 				sbox->setEnabled(!ri.readonly);

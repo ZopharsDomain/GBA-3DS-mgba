@@ -3,9 +3,9 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#include "util/vfs.h"
+#include <mgba-util/vfs.h>
 
-#include "util/string.h"
+#include <mgba-util/string.h>
 
 #ifdef USE_LIBZIP
 #include <zip.h>
@@ -41,7 +41,7 @@ enum {
 #else
 #include "third-party/zlib/contrib/minizip/unzip.h"
 #endif
-#include "util/memory.h"
+#include <mgba-util/memory.h>
 
 struct VDirEntryZip {
 	struct VDirEntry d;
@@ -61,6 +61,7 @@ struct VFileZip {
 	struct VFile d;
 	unzFile z;
 	void* buffer;
+	size_t bufferSize;
 	size_t fileSize;
 };
 #endif
@@ -451,7 +452,9 @@ static enum VFSType _vdezType(struct VDirEntry* vde) {
 bool _vfzClose(struct VFile* vf) {
 	struct VFileZip* vfz = (struct VFileZip*) vf;
 	unzCloseCurrentFile(vfz->z);
-	free(vfz->buffer);
+	if (vfz->buffer) {
+		mappedMemoryFree(vfz->buffer, vfz->bufferSize);
+	}
 	free(vfz);
 	return true;
 }
@@ -536,6 +539,8 @@ void* _vfzMap(struct VFile* vf, size_t size, int flags) {
 	unzOpenCurrentFile(vfz->z);
 	vf->seek(vf, pos, SEEK_SET);
 
+	vfz->bufferSize = size;
+
 	return vfz->buffer;
 }
 
@@ -619,6 +624,7 @@ struct VFile* _vdzOpenFile(struct VDir* vd, const char* path, int mode) {
 	struct VFileZip* vfz = malloc(sizeof(struct VFileZip));
 	vfz->z = vdz->z;
 	vfz->buffer = 0;
+	vfz->bufferSize = 0;
 	vfz->fileSize = info.uncompressed_size;
 
 	vfz->d.close = _vfzClose;

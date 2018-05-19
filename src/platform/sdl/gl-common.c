@@ -5,7 +5,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "main.h"
 
-#include "core/version.h"
+#include <mgba/core/version.h>
+
+void mSDLGLDoViewport(int w, int h, struct VideoBackend* v) {
+	v->resized(v, w, h);
+	v->clear(v);
+	v->swap(v);
+	v->clear(v);
+}
 
 void mSDLGLCommonSwap(struct VideoBackend* context) {
 	struct mSDLRenderer* renderer = (struct mSDLRenderer*) context->user;
@@ -38,6 +45,9 @@ void mSDLGLCommonInit(struct mSDLRenderer* renderer) {
 	SDL_GL_SetSwapInterval(1);
 	SDL_GetWindowSize(renderer->window, &renderer->viewportWidth, &renderer->viewportHeight);
 	renderer->player.window = renderer->window;
+	if (renderer->lockIntegerScaling) {
+		SDL_SetWindowMinimumSize(renderer->window, renderer->width, renderer->height);
+	}
 #else
 	SDL_GL_SetAttribute(SDL_GL_SWAP_CONTROL, 1);
 #ifdef COLOR_16_BIT

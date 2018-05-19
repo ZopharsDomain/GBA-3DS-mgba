@@ -5,14 +5,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "gles2.h"
 
-#include "core/log.h"
-#include "util/configuration.h"
-#include "util/formatting.h"
-#include "util/vector.h"
-#include "util/vfs.h"
+#include <mgba/core/log.h>
+#include <mgba-util/configuration.h>
+#include <mgba-util/formatting.h>
+#include <mgba-util/math.h>
+#include <mgba-util/vector.h>
+#include <mgba-util/vfs.h>
 
 mLOG_DECLARE_CATEGORY(OPENGL);
-mLOG_DEFINE_CATEGORY(OPENGL, "OpenGL");
+mLOG_DEFINE_CATEGORY(OPENGL, "OpenGL", "video.ogl");
 
 #define MAX_PASSES 8
 
@@ -148,6 +149,8 @@ static void mGLES2ContextSetDimensions(struct VideoBackend* v, unsigned width, u
 #else
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, 0);
 #endif
+#elif defined(__BIG_ENDIAN__)
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV, 0);
 #else
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
 #endif
@@ -171,7 +174,11 @@ static void mGLES2ContextResized(struct VideoBackend* v, unsigned w, unsigned h)
 			drawH = w * v->height / v->width;
 		}
 	}
-	glViewport(0, 0, v->width, v->height);
+	if (v->lockIntegerScaling) {
+		drawW -= drawW % v->width;
+		drawH -= drawH % v->height;
+	}
+	glViewport(0, 0, w, h);
 	glClearColor(0.f, 0.f, 0.f, 1.f);
 	glClear(GL_COLOR_BUFFER_BIT);
 	glViewport((w - drawW) / 2, (h - drawH) / 2, drawW, drawH);
@@ -186,26 +193,19 @@ static void mGLES2ContextClear(struct VideoBackend* v) {
 void _drawShader(struct mGLES2Context* context, struct mGLES2Shader* shader) {
 	GLint viewport[4];
 	glBindFramebuffer(GL_FRAMEBUFFER, shader->fbo);
-	if (shader->blend) {
-		glEnable(GL_BLEND);
-		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	} else {
-		glDisable(GL_BLEND);
-		glClear(GL_COLOR_BUFFER_BIT);
-	}
 
 	glGetIntegerv(GL_VIEWPORT, viewport);
 	int drawW = shader->width;
 	int drawH = shader->height;
 	int padW = 0;
 	int padH = 0;
-	if (!shader->width) {
+	if (!drawW) {
 		drawW = viewport[2];
 		padW = viewport[0];
 	} else if (shader->width < 0) {
 		drawW = context->d.width * -shader->width;
 	}
-	if (!shader->height) {
+	if (!drawH) {
 		drawH = viewport[3];
 		padH = viewport[1];
 	} else if (shader->height < 0) {
@@ -218,6 +218,14 @@ void _drawShader(struct mGLES2Context* context, struct mGLES2Shader* shader) {
 		drawH -= drawH % context->d.height;
 	}
 	glViewport(padW, padH, drawW, drawH);
+	if (shader->blend) {
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	} else {
+		glDisable(GL_BLEND);
+		glClear(GL_COLOR_BUFFER_BIT);
+	}
+
 	if (shader->tex && (shader->width <= 0 || shader->height <= 0)) {
 		GLint oldTex;
 		glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTex);
@@ -230,7 +238,7 @@ void _drawShader(struct mGLES2Context* context, struct mGLES2Shader* shader) {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, shader->filter ? GL_LINEAR : GL_NEAREST);
 	glUseProgram(shader->program);
 	glUniform1i(shader->texLocation, 0);
-	glUniform2f(shader->texSizeLocation, context->d.width, context->d.height);
+	glUniform2f(shader->texSizeLocation, context->d.width - padW, context->d.height - padH);
 	glVertexAttribPointer(shader->positionLocation, 2, GL_FLOAT, GL_FALSE, 0, _vertices);
 	glEnableVertexAttribArray(shader->positionLocation);
 	size_t u;
@@ -286,7 +294,6 @@ void _drawShader(struct mGLES2Context* context, struct mGLES2Shader* shader) {
 	}
 	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 	glBindTexture(GL_TEXTURE_2D, shader->tex);
-	glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
 }
 
 void mGLES2ContextDrawFrame(struct VideoBackend* v) {
@@ -294,12 +301,17 @@ void mGLES2ContextDrawFrame(struct VideoBackend* v) {
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, context->tex);
 
+	GLint viewport[4];
+	glGetIntegerv(GL_VIEWPORT, viewport);
+
 	context->finalShader.filter = v->filter;
 	_drawShader(context, &context->initialShader);
 	size_t n;
 	for (n = 0; n < context->nShaders; ++n) {
+		glViewport(0, 0, viewport[2], viewport[3]);
 		_drawShader(context, &context->shaders[n]);
 	}
+	glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
 	_drawShader(context, &context->finalShader);
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	glUseProgram(0);
@@ -314,6 +326,8 @@ void mGLES2ContextPostFrame(struct VideoBackend* v, const void* frame) {
 #else
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, v->width, v->height, 0, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, frame);
 #endif
+#elif defined(__BIG_ENDIAN__)
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, v->width, v->height, 0, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV, frame);
 #else
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, v->width, v->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, frame);
 #endif

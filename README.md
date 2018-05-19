@@ -10,7 +10,7 @@ Up-to-date news and downloads can be found at [mgba.io](https://mgba.io/).
 Features
 --------
 
-- Near full Game Boy Advance hardware support[<sup>[1]</sup>](#missing).
+- Highly accurate Game Boy Advance hardware support[<sup>[1]</sup>](#missing).
 - Game Boy/Game Boy Color hardware support.
 - Fast emulation. Known to run at full speed even on low end hardware, such as netbooks.
 - Qt and SDL ports for a heavy-weight and a light-weight frontend.
@@ -18,6 +18,8 @@ Features
 - Save type detection, even for flash memory size[<sup>[2]</sup>](#flashdetect).
 - Support for cartridges with motion sensors and rumble (only usable with game controllers).
 - Real-time clock support, even without configuration.
+- Solar sensor support for Boktai games.
+- Game Boy Camera and Game Boy Printer support.
 - A built-in BIOS implementation, and ability to load external BIOS files.
 - Turbo/fast-forward support by holding Tab.
 - Rewind by holding Backquote.
@@ -29,11 +31,36 @@ Features
 - Remappable controls for both keyboards and gamepads.
 - Loading from ZIP and 7z files.
 - IPS, UPS and BPS patch support.
-- Game debugging via a command-line interface (not available with Qt port) and GDB remote support, compatible with IDA Pro.
+- Game debugging via a command-line interface and GDB remote support, compatible with IDA Pro.
 - Configurable emulation rewinding.
 - Support for loading and exporting GameShark and Action Replay snapshots.
 - Cores available for RetroArch/Libretro and OpenEmu.
 - Many, many smaller things.
+
+#### Game Boy mappers
+
+The following mappers are fully supported:
+
+- MBC1
+- MBC1M
+- MBC2
+- MBC3
+- MBC3+RTC
+- MBC5
+- MBC5+Rumble
+- MBC7
+
+The following mappers are partially supported:
+
+- Pocket Cam
+- TAMA5
+- HuC-3
+
+The following mappers are not currently supported:
+
+- MBC6
+- HuC-1
+- MMM01
 
 ### Planned features
 
@@ -45,7 +72,6 @@ Features
 - A comprehensive debug suite.
 - e-Reader support.
 - Wireless adapter support.
-- Game Boy Printer support.
 
 Supported Platforms
 -------------------
@@ -94,11 +120,27 @@ Compiling requires using CMake 2.8.11 or newer. GCC and Clang are both known to 
 
 This will build and install mGBA into `/usr/bin` and `/usr/lib`. Dependencies that are installed will be automatically detected, and features that are disabled if the dependencies are not found will be shown after running the `cmake` command after warnings about being unable to find them.
 
+If you are on macOS, the steps are a little different. Assuming you are using the homebrew package manager, the recommended commands to obtain the dependencies and build are:
+
+	brew install cmake ffmpeg imagemagick libzip qt5 sdl2 libedit
+	mkdir build
+	cd build
+	cmake -DCMAKE_PREFIX_PATH=`brew --prefix qt5` ..
+	make
+
+Note that you should not do a `make install` on macOS, as it will not work properly.
+
 #### Windows developer building
 
-To build on Windows for development, using MSYS2 is recommended. Follow the installation steps found on their [website](https://msys2.github.io). Make sure you're running the 32-bit version ("MinGW-w64 Win32 Shell") and run this additional command (including the braces) to install the needed dependencies (please note that this involves downloading over 500MiB of packages, so it will take a long time):
+To build on Windows for development, using MSYS2 is recommended. Follow the installation steps found on their [website](https://msys2.github.io). Make sure you're running the 32-bit version ("MSYS2 MinGW 32-bit") (or the 64-bit version "MSYS2 MinGW 64-bit" if you want to build for x86_64) and run this additional command (including the braces) to install the needed dependencies (please note that this involves downloading over 1100MiB of packages, so it will take a long time):
 
-	pacman -Sy mingw-w64-i686-{cmake,ffmpeg,gcc,gdb,imagemagick,libzip,pkg-config,qt5,SDL2}
+For x86 (32 bit) builds:
+
+	pacman -Sy base-devel git mingw-w64-i686-{cmake,ffmpeg,gcc,gdb,imagemagick,libelf,libepoxy,libzip,pkg-config,qt5,SDL2,ntldd-git}
+
+For x86_64 (64 bit) builds:
+
+	pacman -Sy base-devel git mingw-w64-x86_64-{cmake,ffmpeg,gcc,gdb,imagemagick,libelf,libepoxy,libzip,pkg-config,qt5,SDL2,ntldd-git}
 
 Check out the source code by running this command:
 
@@ -112,7 +154,7 @@ Then finally build it by running these commands:
 	cmake .. -G "MSYS Makefiles"
 	make
 
-Please note that this build of mGBA for Windows is not suitable for distribution, due to the scattering of DLLs it needs to run, but is perfect for development.
+Please note that this build of mGBA for Windows is not suitable for distribution, due to the scattering of DLLs it needs to run, but is perfect for development. However, if distributing such a build is desired (e.g. for testing on machines that don't have the MSYS2 environment installed), running `cpack -G ZIP` will prepare a zip file with all of the necessary DLLs.
 
 ### Dependencies
 
@@ -125,8 +167,10 @@ mGBA has no hard dependencies, however, the following optional dependencies are 
 - ffmpeg or libav: for video recording.
 - libzip or zlib: for loading ROMs stored in zip files.
 - ImageMagick: for GIF recording.
+- SQLite3: for game databases.
+- libelf: for ELF loading.
 
-Both libpng and zlib are included with the emulator, so they do not need to be externally compiled first.
+SQLite3, libpng, and zlib are included with the emulator, so they do not need to be externally compiled first.
 
 Footnotes
 ---------
@@ -138,7 +182,7 @@ Footnotes
 
 <a name="flashdetect">[2]</a> Flash memory size detection does not work in some cases. These can be configured at runtime, but filing a bug is recommended if such a case is encountered.
 
-<a name="osxver">[3]</a> 10.7 is only needed for the Qt port. The SDL port is known to work on 10.6, and may work on older.
+<a name="osxver">[3]</a> 10.7 is only needed for the Qt port. The SDL port is known to work on 10.5, and may work on older.
 
 [downloads]: http://mgba.io/downloads.html
 [source]: https://github.com/mgba-emu/mgba/
@@ -146,7 +190,7 @@ Footnotes
 Copyright
 ---------
 
-mGBA is Copyright © 2013 – 2016 Jeffrey Pfau. It is distributed under the [Mozilla Public License version 2.0](https://www.mozilla.org/MPL/2.0/). A copy of the license is available in the distributed LICENSE file.
+mGBA is Copyright © 2013 – 2018 Jeffrey Pfau. It is distributed under the [Mozilla Public License version 2.0](https://www.mozilla.org/MPL/2.0/). A copy of the license is available in the distributed LICENSE file.
 
 mGBA contains the following third-party libraries:
 
@@ -155,5 +199,6 @@ mGBA contains the following third-party libraries:
 - [LZMA SDK](http://www.7-zip.org/sdk.html), which is public domain.
 - [MurmurHash3](https://github.com/aappleby/smhasher) implementation by Austin Appleby, which is public domain.
 - [getopt for MSVC](https://github.com/skandhurkat/Getopt-for-Visual-Studio/), which is public domain.
+- [SQLite3](https://www.sqlite.org), which is public domain.
 
 If you are a game publisher and wish to license mGBA for commercial usage, please email [licensing@mgba.io](mailto:licensing@mgba.io) for more information.

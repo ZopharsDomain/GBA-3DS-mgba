@@ -5,8 +5,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "util/test/suite.h"
 
-#include "core/core.h"
-#include "util/vfs.h"
+#include <mgba/core/core.h>
+#include <mgba-util/vfs.h>
 
 #if !defined(MINIMAL_CORE) || MINIMAL_CORE < 2
 M_TEST_DEFINE(findNullPath) {
@@ -34,9 +34,3 @@ M_TEST_SUITE_DEFINE(mCore,
 #endif
 	cmocka_unit_test(findNullVF),
 	cmocka_unit_test(findEmpty))
-
-int TestRunCore(void) {
-	int failures = 0;
-	failures += M_TEST_SUITE_RUN(mCore);
-	return failures;
-}

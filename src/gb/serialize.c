@@ -3,28 +3,29 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#include "serialize.h"
+#include <mgba/internal/gb/serialize.h>
 
-#include "gb/io.h"
-#include "gb/timer.h"
+#include <mgba/internal/gb/io.h>
+#include <mgba/internal/gb/timer.h>
+#include <mgba/internal/lr35902/lr35902.h>
 
-mLOG_DEFINE_CATEGORY(GB_STATE, "GB Savestate");
+#include <mgba-util/memory.h>
 
-#ifdef _MSC_VER
-#include <time.h>
-#else
-#include <sys/time.h>
-#endif
+mLOG_DEFINE_CATEGORY(GB_STATE, "GB Savestate", "gb.serialize");
 
 const uint32_t GB_SAVESTATE_MAGIC = 0x00400000;
-const uint32_t GB_SAVESTATE_VERSION = 0x00000000;
+const uint32_t GB_SAVESTATE_VERSION = 0x00000002;
+
+static void GBSGBSerialize(struct GB* gb, struct GBSerializedState* state);
+static void GBSGBDeserialize(struct GB* gb, const struct GBSerializedState* state);
 
 void GBSerialize(struct GB* gb, struct GBSerializedState* state) {
 	STORE_32LE(GB_SAVESTATE_MAGIC + GB_SAVESTATE_VERSION, 0, &state->versionMagic);
 	STORE_32LE(gb->romCrc32, 0, &state->romCrc32);
+	STORE_32LE(gb->timing.masterCycles, 0, &state->masterCycles);
 
 	if (gb->memory.rom) {
-		memcpy(state->title, ((struct GBCartridge*) gb->memory.rom)->titleLong, sizeof(state->title));
+		memcpy(state->title, ((struct GBCartridge*) &gb->memory.rom[0x100])->titleLong, sizeof(state->title));
 	} else {
 		memset(state->title, 0, sizeof(state->title));
 	}
@@ -48,15 +49,14 @@ void GBSerialize(struct GB* gb, struct GBSerializedState* state) {
 	STORE_16LE(gb->cpu->index, 0, &state->cpu.index);
 	state->cpu.bus = gb->cpu->bus;
 	state->cpu.executionState = gb->cpu->executionState;
-	STORE_16LE(gb->cpu->irqVector, 0, &state->cpu.irqVector);
-
-	STORE_32LE(gb->eiPending, 0, &state->cpu.eiPending);
 
 	GBSerializedCpuFlags flags = 0;
 	flags = GBSerializedCpuFlagsSetCondition(flags, gb->cpu->condition);
 	flags = GBSerializedCpuFlagsSetIrqPending(flags, gb->cpu->irqPending);
 	flags = GBSerializedCpuFlagsSetDoubleSpeed(flags, gb->doubleSpeed);
+	flags = GBSerializedCpuFlagsSetEiPending(flags, mTimingIsScheduled(&gb->timing, &gb->eiPending));
 	STORE_32LE(flags, 0, &state->cpu.flags);
+	STORE_32LE(gb->eiPending.when - mTimingCurrentTime(&gb->timing), 0, &state->cpu.eiPending);
 
 	GBMemorySerialize(gb, state);
 	GBIOSerialize(gb, state);
@@ -64,23 +64,8 @@ void GBSerialize(struct GB* gb, struct GBSerializedState* state) {
 	GBTimerSerialize(&gb->timer, state);
 	GBAudioSerialize(&gb->audio, state);
 
-#ifndef _MSC_VER
-	struct timeval tv;
-	if (!gettimeofday(&tv, 0)) {
-		uint64_t usec = tv.tv_usec;
-		usec += tv.tv_sec * 1000000LL;
-		STORE_64LE(usec, 0, &state->creationUsec);
-	}
-#else
-	struct timespec ts;
-	if (timespec_get(&ts, TIME_UTC)) {
-		uint64_t usec = ts.tv_nsec / 1000;
-		usec += ts.tv_sec * 1000000LL;
-		STORE_64LE(usec, 0, &state->creationUsec);
-	}
-#endif
-	else {
-		state->creationUsec = 0;
+	if (gb->model == GB_MODEL_SGB) {
+		GBSGBSerialize(gb, state);
 	}
 }
 
@@ -100,10 +85,15 @@ bool GBDeserialize(struct GB* gb, const struct GBSerializedState* state) {
 	} else if (ucheck < GB_SAVESTATE_MAGIC + GB_SAVESTATE_VERSION) {
 		mLOG(GB_STATE, WARN, "Old savestate: expected %08X, got %08X, continuing anyway", GB_SAVESTATE_MAGIC + GB_SAVESTATE_VERSION, ucheck);
 	}
+	bool canSgb = ucheck >= GB_SAVESTATE_MAGIC + 2;
 
-	if (gb->memory.rom && memcmp(state->title, ((struct GBCartridge*) gb->memory.rom)->titleLong, sizeof(state->title))) {
-		mLOG(GB_STATE, WARN, "Savestate is for a different game");
-		error = true;
+	if (gb->memory.rom && memcmp(state->title, ((struct GBCartridge*) &gb->memory.rom[0x100])->titleLong, sizeof(state->title))) {
+		LOAD_32LE(ucheck, 0, &state->versionMagic);
+		if (ucheck > GB_SAVESTATE_MAGIC + 2 || memcmp(state->title, ((struct GBCartridge*) gb->memory.rom)->titleLong, sizeof(state->title))) {
+			// There was a bug in previous versions where the memory address being compared was wrong
+			mLOG(GB_STATE, WARN, "Savestate is for a different game");
+			error = true;
+		}
 	}
 	LOAD_32LE(ucheck, 0, &state->romCrc32);
 	if (ucheck != gb->romCrc32) {
@@ -120,11 +110,6 @@ bool GBDeserialize(struct GB* gb, const struct GBSerializedState* state) {
 	}
 	if (check >= (int32_t) DMG_LR35902_FREQUENCY) {
 		mLOG(GB_STATE, WARN, "Savestate is corrupted: CPU cycles are too high");
-		error = true;
-	}
-	LOAD_32LE(check, 0, &state->video.eventDiff);
-	if (check < 0) {
-		mLOG(GB_STATE, WARN, "Savestate is corrupted: video eventDiff is negative");
 		error = true;
 	}
 	LOAD_16LE(check16, 0, &state->video.x);
@@ -153,6 +138,8 @@ bool GBDeserialize(struct GB* gb, const struct GBSerializedState* state) {
 	if (error) {
 		return false;
 	}
+	gb->timing.root = NULL;
+	LOAD_32LE(gb->timing.masterCycles, 0, &state->masterCycles);
 
 	gb->cpu->a = state->cpu.a;
 	gb->cpu->f.packed = state->cpu.f;
@@ -168,19 +155,25 @@ bool GBDeserialize(struct GB* gb, const struct GBSerializedState* state) {
 	LOAD_16LE(gb->cpu->index, 0, &state->cpu.index);
 	gb->cpu->bus = state->cpu.bus;
 	gb->cpu->executionState = state->cpu.executionState;
-	LOAD_16LE(gb->cpu->irqVector, 0, &state->cpu.irqVector);
-
-	LOAD_32LE(gb->eiPending, 0, &state->cpu.eiPending);
 
 	GBSerializedCpuFlags flags;
 	LOAD_32LE(flags, 0, &state->cpu.flags);
 	gb->cpu->condition = GBSerializedCpuFlagsGetCondition(flags);
 	gb->cpu->irqPending = GBSerializedCpuFlagsGetIrqPending(flags);
 	gb->doubleSpeed = GBSerializedCpuFlagsGetDoubleSpeed(flags);
+	gb->audio.timingFactor = gb->doubleSpeed + 1;
 
 	LOAD_32LE(gb->cpu->cycles, 0, &state->cpu.cycles);
 	LOAD_32LE(gb->cpu->nextEvent, 0, &state->cpu.nextEvent);
+	gb->timing.root = NULL;
 
+	uint32_t when;
+	LOAD_32LE(when, 0, &state->cpu.eiPending);
+	if (GBSerializedCpuFlagsIsEiPending(flags)) {
+		mTimingSchedule(&gb->timing, &gb->eiPending, when);
+	}
+
+	enum GBModel oldModel = gb->model;
 	gb->model = state->model;
 
 	if (gb->model < GB_MODEL_CGB) {
@@ -189,13 +182,97 @@ bool GBDeserialize(struct GB* gb, const struct GBSerializedState* state) {
 		gb->audio.style = GB_AUDIO_CGB;
 	}
 
+	if (gb->model != GB_MODEL_SGB || oldModel != GB_MODEL_SGB) {
+		gb->video.sgbBorders = false;
+	}
+
 	GBMemoryDeserialize(gb, state);
-	GBIODeserialize(gb, state);
 	GBVideoDeserialize(&gb->video, state);
+	GBIODeserialize(gb, state);
 	GBTimerDeserialize(&gb->timer, state);
 	GBAudioDeserialize(&gb->audio, state);
 
+	if (gb->model == GB_MODEL_SGB && canSgb) {
+		GBSGBDeserialize(gb, state);
+	}
+
 	gb->cpu->memory.setActiveRegion(gb->cpu, gb->cpu->pc);
 
+	gb->timing.reroot = gb->timing.root;
+	gb->timing.root = NULL;
+
 	return true;
+}
+
+// TODO: Reorganize SGB into its own file
+void GBSGBSerialize(struct GB* gb, struct GBSerializedState* state) {
+	state->sgb.command = gb->video.sgbCommandHeader;
+	state->sgb.bits = gb->sgbBit;
+
+	GBSerializedSGBFlags flags = 0;
+	flags = GBSerializedSGBFlagsSetP1Bits(flags, gb->currentSgbBits);
+	flags = GBSerializedSGBFlagsSetRenderMode(flags, gb->video.renderer->sgbRenderMode);
+	flags = GBSerializedSGBFlagsSetBufferIndex(flags, gb->video.sgbBufferIndex);
+	flags = GBSerializedSGBFlagsSetReqControllers(flags, gb->sgbControllers);
+	flags = GBSerializedSGBFlagsSetCurrentController(flags, gb->sgbCurrentController);
+	STORE_32LE(flags, 0, &state->sgb.flags);
+
+	memcpy(state->sgb.packet, gb->video.sgbPacketBuffer, sizeof(state->sgb.packet));
+	memcpy(state->sgb.inProgressPacket, gb->sgbPacket, sizeof(state->sgb.inProgressPacket));
+
+	if (gb->video.renderer->sgbCharRam) {
+		memcpy(state->sgb.charRam, gb->video.renderer->sgbCharRam, sizeof(state->sgb.charRam));
+	}
+	if (gb->video.renderer->sgbMapRam) {
+		memcpy(state->sgb.mapRam, gb->video.renderer->sgbMapRam, sizeof(state->sgb.mapRam));
+	}
+	if (gb->video.renderer->sgbPalRam) {
+		memcpy(state->sgb.palRam, gb->video.renderer->sgbPalRam, sizeof(state->sgb.palRam));
+	}
+	if (gb->video.renderer->sgbAttributeFiles) {
+		memcpy(state->sgb.atfRam, gb->video.renderer->sgbAttributeFiles, sizeof(state->sgb.atfRam));
+	}
+	if (gb->video.renderer->sgbAttributes) {
+		memcpy(state->sgb.attributes, gb->video.renderer->sgbAttributes, sizeof(state->sgb.attributes));
+	}
+}
+
+void GBSGBDeserialize(struct GB* gb, const struct GBSerializedState* state) {
+	gb->video.sgbCommandHeader = state->sgb.command;
+	gb->sgbBit = state->sgb.bits;
+
+	GBSerializedSGBFlags flags;
+	LOAD_32LE(flags, 0, &state->sgb.flags);
+	gb->currentSgbBits = GBSerializedSGBFlagsGetP1Bits(flags);
+	gb->video.renderer->sgbRenderMode = GBSerializedSGBFlagsGetRenderMode(flags);
+	gb->video.sgbBufferIndex = GBSerializedSGBFlagsGetBufferIndex(flags);
+	gb->sgbControllers = GBSerializedSGBFlagsGetReqControllers(flags);
+	gb->sgbCurrentController = GBSerializedSGBFlagsGetCurrentController(flags);
+
+	memcpy(gb->video.sgbPacketBuffer, state->sgb.packet, sizeof(state->sgb.packet));
+	memcpy(gb->sgbPacket, state->sgb.inProgressPacket, sizeof(state->sgb.inProgressPacket));
+
+	if (!gb->video.renderer->sgbCharRam) {
+		gb->video.renderer->sgbCharRam = anonymousMemoryMap(SGB_SIZE_CHAR_RAM);
+	}
+	if (!gb->video.renderer->sgbMapRam) {
+		gb->video.renderer->sgbMapRam = anonymousMemoryMap(SGB_SIZE_MAP_RAM);
+	}
+	if (!gb->video.renderer->sgbPalRam) {
+		gb->video.renderer->sgbPalRam = anonymousMemoryMap(SGB_SIZE_PAL_RAM);
+	}
+	if (!gb->video.renderer->sgbAttributeFiles) {
+		gb->video.renderer->sgbAttributeFiles = anonymousMemoryMap(SGB_SIZE_ATF_RAM);
+	}
+	if (!gb->video.renderer->sgbAttributes) {
+		gb->video.renderer->sgbAttributes = malloc(90 * 45);
+	}
+
+	memcpy(gb->video.renderer->sgbCharRam, state->sgb.charRam, sizeof(state->sgb.charRam));
+	memcpy(gb->video.renderer->sgbMapRam, state->sgb.mapRam, sizeof(state->sgb.mapRam));
+	memcpy(gb->video.renderer->sgbPalRam, state->sgb.palRam, sizeof(state->sgb.palRam));
+	memcpy(gb->video.renderer->sgbAttributeFiles, state->sgb.atfRam, sizeof(state->sgb.atfRam));
+	memcpy(gb->video.renderer->sgbAttributes, state->sgb.attributes, sizeof(state->sgb.attributes));
+
+	GBVideoWriteSGBPacket(&gb->video, (uint8_t[16]) { (SGB_ATRC_EN << 3) | 1, 0 });
 }

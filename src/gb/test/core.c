@@ -5,10 +5,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "util/test/suite.h"
 
-#include "core/core.h"
-#include "gb/core.h"
-#include "gb/gb.h"
-#include "util/vfs.h"
+#include <mgba/core/core.h>
+#include <mgba/gb/core.h>
+#include <mgba/internal/gb/gb.h>
+#include <mgba-util/vfs.h>
 
 M_TEST_DEFINE(create) {
 	struct mCore* core = GBCoreCreate();
@@ -29,6 +29,7 @@ M_TEST_DEFINE(reset) {
 	struct mCore* core = GBCoreCreate();
 	assert_non_null(core);
 	assert_true(core->init(core));
+	mCoreInitConfig(core, NULL);
 	core->reset(core);
 	core->deinit(core);
 }
@@ -37,6 +38,7 @@ M_TEST_DEFINE(loadNullROM) {
 	struct mCore* core = GBCoreCreate();
 	assert_non_null(core);
 	assert_true(core->init(core));
+	mCoreInitConfig(core, NULL);
 	assert_false(core->loadROM(core, NULL));
 	core->reset(core);
 	core->deinit(core);

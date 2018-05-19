@@ -1,4 +1,4 @@
-set(USE_VFS_3DS ON CACNE BOOL "Use 3DS-specific file support")
+set(USE_VFS_3DS ON CACHE BOOL "Use 3DS-specific file support")
 mark_as_advanced(USE_VFS_3DS)
 
 find_program(3DSLINK 3dslink)
@@ -13,7 +13,11 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-format" PARENT_SCOPE)
 set(OS_DEFINES COLOR_16_BIT COLOR_5_6_5 IOAPI_NO_64)
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
-list(APPEND OS_LIB citro3d ctru)
+if(${CMAKE_BUILD_TYPE} STREQUAL Debug OR ${CMAKE_BUILD_TYPE} STREQUAL RelWithDebInfo)
+	list(APPEND OS_LIB citro3dd ctrud)
+else()
+	list(APPEND OS_LIB citro3d ctru)
+endif()
 file(GLOB OS_SRC ${CMAKE_CURRENT_SOURCE_DIR}/3ds-*.c ${CMAKE_CURRENT_SOURCE_DIR}/ctru-heap.c ${CMAKE_CURRENT_SOURCE_DIR}/socket.c)
 set(OS_SRC ${OS_SRC} PARENT_SCOPE)
 set(OS_LIB ${OS_LIB} PARENT_SCOPE)
@@ -53,6 +57,10 @@ add_custom_command(OUTPUT ${BINARY_NAME}.smdh
                    COMMAND ${BANNERTOOL} makesmdh -s "${PROJECT_NAME}" -l "${SUMMARY}" -p "endrift" -i ${CMAKE_SOURCE_DIR}/res/mgba-48.png -o ${BINARY_NAME}.smdh
                    DEPENDS ${CMAKE_SOURCE_DIR}/res/mgba-48.png)
 
+add_custom_command(OUTPUT ${BINARY_NAME}.xml
+                   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/hbl.xml ${BINARY_NAME}.xml
+                   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/hbl.xml)
+
 add_custom_command(OUTPUT ${BINARY_NAME}.bnr
                    COMMAND ${BANNERTOOL} makebanner -ci ${CMAKE_CURRENT_SOURCE_DIR}/banner.cgfx -a ${CMAKE_CURRENT_SOURCE_DIR}/bios.wav -o ${BINARY_NAME}.bnr
                    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/banner.cgfx ${CMAKE_CURRENT_SOURCE_DIR}/bios.wav)
@@ -80,7 +88,7 @@ add_custom_command(
 
 add_custom_command(OUTPUT ${BINARY_NAME}.3dsx
                    COMMAND ${3DSXTOOL} ${BINARY_NAME}.elf ${BINARY_NAME}.3dsx --smdh=${BINARY_NAME}.smdh
-                   DEPENDS ${BINARY_NAME}.elf ${BINARY_NAME}.smdh)
+                   DEPENDS ${BINARY_NAME}.elf ${BINARY_NAME}.smdh ${BINARY_NAME}.xml)
 add_custom_target(${BINARY_NAME}.3dsx ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${BINARY_NAME}.3dsx)
 
 add_custom_command(OUTPUT ${BINARY_NAME}.cia
@@ -101,12 +109,15 @@ if(BUILD_PERF)
 	                  DEPENDS ${BINARY_NAME}-perf ${BINARY_NAME}.smdh)
 	install(FILES
 		    ${CMAKE_CURRENT_BINARY_DIR}/${BINARY_NAME}-perf.3dsx
-		    DESTINATION . COMPONENT ${BINARY_NAME}-3ds)
+		    DESTINATION . COMPONENT ${BINARY_NAME}-perf)
 endif()
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cia.rsf.in ${CMAKE_CURRENT_BINARY_DIR}/cia.rsf)
 install(FILES
 	    ${CMAKE_CURRENT_BINARY_DIR}/${BINARY_NAME}.3dsx
 	    ${CMAKE_CURRENT_BINARY_DIR}/${BINARY_NAME}.smdh
+	    ${CMAKE_CURRENT_BINARY_DIR}/${BINARY_NAME}.xml
+	    DESTINATION 3dsx COMPONENT ${BINARY_NAME}-3ds)
+install(FILES
 	    ${CMAKE_CURRENT_BINARY_DIR}/${BINARY_NAME}.cia
-	    DESTINATION . COMPONENT ${BINARY_NAME}-3ds)
+	    DESTINATION cia COMPONENT ${BINARY_NAME}-3ds)

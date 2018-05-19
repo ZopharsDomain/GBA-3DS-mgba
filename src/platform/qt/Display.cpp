@@ -8,14 +8,6 @@
 #include "DisplayGL.h"
 #include "DisplayQt.h"
 
-extern "C" {
-#ifdef M_CORE_GB
-#include "gb/video.h"
-#elif defined(M_CORE_GBA)
-#include "gba/video.h"
-#endif
-}
-
 using namespace QGBA;
 
 #if defined(BUILD_GL) || defined(BUILD_GLES2) || defined(USE_EPOXY)
@@ -55,16 +47,9 @@ Display* Display::create(QWidget* parent) {
 
 Display::Display(QWidget* parent)
 	: QWidget(parent)
-	, m_lockAspectRatio(false)
-	, m_filter(false)
 {
 	setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::MinimumExpanding);
-#ifdef M_CORE_GB
-	setMinimumSize(GB_VIDEO_HORIZONTAL_PIXELS, GB_VIDEO_VERTICAL_PIXELS);
-#elif defined(M_CORE_GBA)
-	setMinimumSize(VIDEO_HORIZONTAL_PIXELS, VIDEO_VERTICAL_PIXELS);
-#endif
-	connect(&m_mouseTimer, SIGNAL(timeout()), this, SIGNAL(hideCursor()));
+	connect(&m_mouseTimer, &QTimer::timeout, this, &Display::hideCursor);
 	m_mouseTimer.setSingleShot(true);
 	m_mouseTimer.setInterval(MOUSE_DISAPPEAR_TIMER);
 	setMouseTracking(true);
@@ -77,6 +62,10 @@ void Display::resizeEvent(QResizeEvent*) {
 void Display::lockAspectRatio(bool lock) {
 	m_lockAspectRatio = lock;
 	m_messagePainter.resize(size(), m_lockAspectRatio, devicePixelRatio());
+}
+
+void Display::lockIntegerScaling(bool lock) {
+	m_lockIntegerScaling = lock;
 }
 
 void Display::filter(bool filter) {

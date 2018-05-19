@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015 Jeffrey Pfau
+/* Copyright (c) 2013-2016 Jeffrey Pfau
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,19 +7,24 @@
 
 #include "gl-common.h"
 
-#include <malloc.h>
+#include <mgba/core/core.h>
+#include <mgba/core/thread.h>
 
-static bool mSDLGLES2Init(struct SDLSoftwareRenderer* renderer);
-static void mSDLGLES2RunloopGBA(struct SDLSoftwareRenderer* renderer, void* user);
-static void mSDLGLES2Deinit(struct SDLSoftwareRenderer* renderer);
+#ifndef __APPLE__
+#include <malloc.h>
+#endif
+
+static bool mSDLGLES2Init(struct mSDLRenderer* renderer);
+static void mSDLGLES2Runloop(struct mSDLRenderer* renderer, void* user);
+static void mSDLGLES2Deinit(struct mSDLRenderer* renderer);
 
 void mSDLGLES2Create(struct mSDLRenderer* renderer) {
 	renderer->init = mSDLGLES2Init;
 	renderer->deinit = mSDLGLES2Deinit;
-	renderer->runloop = mSDLGLES2RunloopGBA;
+	renderer->runloop = mSDLGLES2Runloop;
 }
 
-bool mSDLGLES2Init(struct SDLSoftwareRenderer* renderer) {
+bool mSDLGLES2Init(struct mSDLRenderer* renderer) {
 #ifdef BUILD_RASPI
 	bcm_host_init();
 	renderer->display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
@@ -93,33 +98,50 @@ bool mSDLGLES2Init(struct SDLSoftwareRenderer* renderer) {
 	mSDLGLCommonInit(renderer);
 #endif
 
-	renderer->d.outputBuffer = memalign(16, VIDEO_HORIZONTAL_PIXELS * VIDEO_VERTICAL_PIXELS * 4);
-	renderer->d.outputBufferStride = VIDEO_HORIZONTAL_PIXELS;
+	size_t size = renderer->width * renderer->height * BYTES_PER_PIXEL;
+#ifndef __APPLE__
+	renderer->outputBuffer = memalign(16, size);
+#else
+	posix_memalign((void**) &renderer->outputBuffer, 16, size);
+#endif
+	memset(renderer->outputBuffer, 0, size);
+	renderer->core->setVideoBuffer(renderer->core, renderer->outputBuffer, renderer->width);
 
 	mGLES2ContextCreate(&renderer->gl2);
 	renderer->gl2.d.user = renderer;
 	renderer->gl2.d.lockAspectRatio = renderer->lockAspectRatio;
+	renderer->gl2.d.lockIntegerScaling = renderer->lockIntegerScaling;
 	renderer->gl2.d.filter = renderer->filter;
 	renderer->gl2.d.swap = mSDLGLCommonSwap;
 	renderer->gl2.d.init(&renderer->gl2.d, 0);
 	renderer->gl2.d.setDimensions(&renderer->gl2.d, renderer->width, renderer->height);
+
+	mSDLGLDoViewport(renderer->viewportWidth, renderer->viewportHeight, &renderer->gl2.d);
 	return true;
 }
 
 void mSDLGLES2Runloop(struct mSDLRenderer* renderer, void* user) {
-	struct GBAThread* context = user;
+	struct mCoreThread* context = user;
 	SDL_Event event;
 	struct VideoBackend* v = &renderer->gl2.d;
 
-	while (context->state < THREAD_EXITING) {
+	while (mCoreThreadIsActive(context)) {
 		while (SDL_PollEvent(&event)) {
-			mSDLHandleEventGBA(context, &renderer->player, &event);
+			mSDLHandleEvent(context, &renderer->player, &event);
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+			// Event handling can change the size of the screen
+			if (renderer->player.windowUpdated) {
+				SDL_GetWindowSize(renderer->window, &renderer->viewportWidth, &renderer->viewportHeight);
+				mSDLGLDoViewport(renderer->viewportWidth, renderer->viewportHeight, v);
+				renderer->player.windowUpdated = 0;
+			}
+#endif
 		}
 
-		if (mCoreSyncWaitFrameStart(&context->sync)) {
-			v->postFrame(v, renderer->d.outputBuffer);
+		if (mCoreSyncWaitFrameStart(&context->impl->sync)) {
+			v->postFrame(v, renderer->outputBuffer);
 		}
-		mCoreSyncWaitFrameEnd(&context->sync);
+		mCoreSyncWaitFrameEnd(&context->impl->sync);
 		v->drawFrame(v);
 #ifdef BUILD_RASPI
 		eglSwapBuffers(renderer->display, renderer->surface);
@@ -142,5 +164,5 @@ void mSDLGLES2Deinit(struct mSDLRenderer* renderer) {
 #elif SDL_VERSION_ATLEAST(2, 0, 0)
 	SDL_GL_DeleteContext(renderer->glCtx);
 #endif
-	free(renderer->d.outputBuffer);
+	free(renderer->outputBuffer);
 }

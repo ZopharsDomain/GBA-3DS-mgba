@@ -3,14 +3,15 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#include "hardware.h"
+#include <mgba/internal/gba/hardware.h>
 
-#include "gba/io.h"
-#include "gba/serialize.h"
-#include "util/formatting.h"
-#include "util/hash.h"
+#include <mgba/internal/arm/macros.h>
+#include <mgba/internal/gba/io.h>
+#include <mgba/internal/gba/serialize.h>
+#include <mgba-util/formatting.h>
+#include <mgba-util/hash.h>
 
-mLOG_DEFINE_CATEGORY(GBA_HW, "GBA Pak Hardware");
+mLOG_DEFINE_CATEGORY(GBA_HW, "GBA Pak Hardware", "gba.hardware");
 
 const int GBA_LUX_LEVELS[10] = { 5, 11, 18, 27, 42, 62, 84, 109, 139, 183 };
 
@@ -33,7 +34,7 @@ static void _lightReadPins(struct GBACartridgeHardware* hw);
 
 static uint16_t _gbpRead(struct mKeyCallback*);
 static uint16_t _gbpSioWriteRegister(struct GBASIODriver* driver, uint32_t address, uint16_t value);
-static int32_t _gbpSioProcessEvents(struct GBASIODriver* driver, int32_t cycles);
+static void _gbpSioProcessEvents(struct mTiming* timing, void* user, uint32_t cyclesLate);
 
 static const int RTC_BYTES[8] = {
 	0, // Force reset
@@ -57,13 +58,16 @@ void GBAHardwareInit(struct GBACartridgeHardware* hw, uint16_t* base) {
 	hw->gbpDriver.d.load = 0;
 	hw->gbpDriver.d.unload = 0;
 	hw->gbpDriver.d.writeRegister = _gbpSioWriteRegister;
-	hw->gbpDriver.d.processEvents = _gbpSioProcessEvents;
 	hw->gbpDriver.p = hw;
+	hw->gbpNextEvent.context = &hw->gbpDriver;
+	hw->gbpNextEvent.name = "GBA SIO Game Boy Player";
+	hw->gbpNextEvent.callback = _gbpSioProcessEvents;
+	hw->gbpNextEvent.priority = 0x80;
 }
 
 void GBAHardwareClear(struct GBACartridgeHardware* hw) {
 	hw->devices = HW_NONE | (hw->devices & HW_GB_PLAYER_DETECTION);
-	hw->direction = GPIO_WRITE_ONLY;
+	hw->readWrite = GPIO_WRITE_ONLY;
 	hw->pinState = 0;
 	hw->direction = 0;
 
@@ -73,10 +77,13 @@ void GBAHardwareClear(struct GBACartridgeHardware* hw) {
 }
 
 void GBAHardwareGPIOWrite(struct GBACartridgeHardware* hw, uint32_t address, uint16_t value) {
+	if (!hw->gpioBase) {
+		return;
+	}
 	switch (address) {
 	case GPIO_REG_DATA:
 		hw->pinState &= ~hw->direction;
-		hw->pinState |= value;
+		hw->pinState |= value & hw->direction;
 		_readPins(hw);
 		break;
 	case GPIO_REG_DIRECTION:
@@ -89,13 +96,13 @@ void GBAHardwareGPIOWrite(struct GBACartridgeHardware* hw, uint32_t address, uin
 		mLOG(GBA_HW, WARN, "Invalid GPIO address");
 	}
 	if (hw->readWrite) {
-		uint16_t old;
-		LOAD_16(old, 0, hw->gpioBase);
-		old &= ~hw->direction;
-		old |= hw->pinState;
-		STORE_16(old, 0, hw->gpioBase);
+		STORE_16(hw->pinState, 0, hw->gpioBase);
+		STORE_16(hw->direction, 2, hw->gpioBase);
+		STORE_16(hw->readWrite, 4, hw->gpioBase);
 	} else {
 		hw->gpioBase[0] = 0;
+		hw->gpioBase[1] = 0;
+		hw->gpioBase[2] = 0;
 	}
 }
 
@@ -164,6 +171,8 @@ void _rtcReadPins(struct GBACartridgeHardware* hw) {
 	case 1:
 		if ((hw->pinState & 5) == 5) {
 			hw->rtc.transferStep = 2;
+		} else {
+			hw->rtc.transferStep = 0;
 		}
 		break;
 	case 2:
@@ -172,11 +181,7 @@ void _rtcReadPins(struct GBACartridgeHardware* hw) {
 			hw->rtc.bits |= ((hw->pinState & 2) >> 1) << hw->rtc.bitsRead;
 		} else {
 			if (hw->pinState & 4) {
-				// GPIO direction should always != reading
-				if (hw->direction & 2) {
-					if (RTCCommandDataIsReading(hw->rtc.command)) {
-						mLOG(GBA_HW, GAME_ERROR, "Attempting to write to RTC while in read mode");
-					}
+				if (!RTCCommandDataIsReading(hw->rtc.command)) {
 					++hw->rtc.bitsRead;
 					if (hw->rtc.bitsRead == 8) {
 						_rtcProcessByte(hw);
@@ -188,7 +193,7 @@ void _rtcReadPins(struct GBACartridgeHardware* hw) {
 						--hw->rtc.bytesRemaining;
 						if (hw->rtc.bytesRemaining <= 0) {
 							hw->rtc.commandActive = 0;
-							hw->rtc.command = RTCCommandDataClearReading(hw->rtc.command);
+							hw->rtc.command = 0;
 						}
 						hw->rtc.bitsRead = 0;
 					}
@@ -197,8 +202,9 @@ void _rtcReadPins(struct GBACartridgeHardware* hw) {
 				hw->rtc.bitsRead = 0;
 				hw->rtc.bytesRemaining = 0;
 				hw->rtc.commandActive = 0;
-				hw->rtc.command = RTCCommandDataClearReading(hw->rtc.command);
-				hw->rtc.transferStep = 0;
+				hw->rtc.command = 0;
+				hw->rtc.transferStep = hw->pinState & 1;
+				_outputPins(hw, 1);
 			}
 		}
 		break;
@@ -249,12 +255,16 @@ void _rtcProcessByte(struct GBACartridgeHardware* hw) {
 	hw->rtc.bitsRead = 0;
 	if (!hw->rtc.bytesRemaining) {
 		hw->rtc.commandActive = 0;
-		hw->rtc.command = RTCCommandDataClearReading(hw->rtc.command);
+		hw->rtc.command = 0;
 	}
 }
 
 unsigned _rtcOutput(struct GBACartridgeHardware* hw) {
 	uint8_t outputByte = 0;
+	if (!hw->rtc.commandActive) {
+		mLOG(GBA_HW, GAME_ERROR, "Attempting to use RTC without an active command");
+		return 0;
+	}
 	switch (RTCCommandDataGetCommand(hw->rtc.command)) {
 	case RTC_CONTROL:
 		outputByte = hw->rtc.control;
@@ -521,7 +531,6 @@ void GBAHardwarePlayerUpdate(struct GBA* gba) {
 	if (GBAHardwarePlayerCheckScreen(&gba->video)) {
 		gba->memory.hw.devices |= HW_GB_PLAYER;
 		gba->memory.hw.gbpInputsPosted = 0;
-		gba->memory.hw.gbpNextEvent = INT_MAX;
 		gba->keyCallback = &gba->memory.hw.gbpCallback.d;
 		GBASIOSetDriver(&gba->sio, &gba->memory.hw.gbpDriver.d, SIO_NORMAL_32);
 	}
@@ -551,37 +560,35 @@ uint16_t _gbpSioWriteRegister(struct GBASIODriver* driver, uint32_t address, uin
 					gbp->p->p->rumble->setRumble(gbp->p->p->rumble, (rx & mask) == 0x22);
 				}
 			}
-			gbp->p->gbpNextEvent = 2048;
+			mTimingDeschedule(&gbp->p->p->timing, &gbp->p->gbpNextEvent);
+			mTimingSchedule(&gbp->p->p->timing, &gbp->p->gbpNextEvent, 2048);
 		}
 		value &= 0x78FB;
 	}
 	return value;
 }
 
-int32_t _gbpSioProcessEvents(struct GBASIODriver* driver, int32_t cycles) {
-	struct GBAGBPSIODriver* gbp = (struct GBAGBPSIODriver*) driver;
-	gbp->p->gbpNextEvent -= cycles;
-	if (gbp->p->gbpNextEvent <= 0) {
-		uint32_t tx = 0;
-		int txPosition = gbp->p->gbpTxPosition;
-		if (txPosition > 16) {
-			gbp->p->gbpTxPosition = 0;
-			txPosition = 0;
-		} else if (txPosition > 12) {
-			txPosition = 12;
-		}
-		tx = _gbpTxData[txPosition];
-		++gbp->p->gbpTxPosition;
-		gbp->p->p->memory.io[REG_SIODATA32_LO >> 1] = tx;
-		gbp->p->p->memory.io[REG_SIODATA32_HI >> 1] = tx >> 16;
-		if (gbp->d.p->normalControl.irq) {
-			GBARaiseIRQ(gbp->p->p, IRQ_SIO);
-		}
-		gbp->d.p->normalControl.start = 0;
-		gbp->p->p->memory.io[REG_SIOCNT >> 1] = gbp->d.p->siocnt;
-		gbp->p->gbpNextEvent = INT_MAX;
+void _gbpSioProcessEvents(struct mTiming* timing, void* user, uint32_t cyclesLate) {
+	UNUSED(timing);
+	UNUSED(cyclesLate);
+	struct GBAGBPSIODriver* gbp = user;
+	uint32_t tx = 0;
+	int txPosition = gbp->p->gbpTxPosition;
+	if (txPosition > 16) {
+		gbp->p->gbpTxPosition = 0;
+		txPosition = 0;
+	} else if (txPosition > 12) {
+		txPosition = 12;
 	}
-	return gbp->p->gbpNextEvent;
+	tx = _gbpTxData[txPosition];
+	++gbp->p->gbpTxPosition;
+	gbp->p->p->memory.io[REG_SIODATA32_LO >> 1] = tx;
+	gbp->p->p->memory.io[REG_SIODATA32_HI >> 1] = tx >> 16;
+	if (gbp->d.p->normalControl.irq) {
+		GBARaiseIRQ(gbp->p->p, IRQ_SIO);
+	}
+	gbp->d.p->normalControl.start = 0;
+	gbp->p->p->memory.io[REG_SIOCNT >> 1] = gbp->d.p->siocnt & ~0x0080;
 }
 
 // == Serialization
@@ -613,7 +620,7 @@ void GBAHardwareSerialize(const struct GBACartridgeHardware* hw, struct GBASeria
 	flags1 = GBASerializedHWFlags1SetLightEdge(flags1, hw->lightEdge);
 	flags2 = GBASerializedHWFlags2SetGbpInputsPosted(flags2, hw->gbpInputsPosted);
 	flags2 = GBASerializedHWFlags2SetGbpTxPosition(flags2, hw->gbpTxPosition);
-	STORE_32(hw->gbpNextEvent, 0, &state->hw.gbpNextEvent);
+	STORE_32(hw->gbpNextEvent.when - mTimingCurrentTime(&hw->p->timing), 0, &state->hw.gbpNextEvent);
 	STORE_16(flags1, 0, &state->hw.flags1);
 	state->hw.flags2 = flags2;
 }
@@ -645,8 +652,13 @@ void GBAHardwareDeserialize(struct GBACartridgeHardware* hw, const struct GBASer
 	hw->lightEdge = GBASerializedHWFlags1GetLightEdge(flags1);
 	hw->gbpInputsPosted = GBASerializedHWFlags2GetGbpInputsPosted(state->hw.flags2);
 	hw->gbpTxPosition = GBASerializedHWFlags2GetGbpTxPosition(state->hw.flags2);
-	LOAD_32(hw->gbpNextEvent, 0, &state->hw.gbpNextEvent);
+
+	uint32_t when;
+	LOAD_32(when, 0, &state->hw.gbpNextEvent);
 	if (hw->devices & HW_GB_PLAYER) {
 		GBASIOSetDriver(&hw->p->sio, &hw->gbpDriver.d, SIO_NORMAL_32);
+		if (hw->p->memory.io[REG_SIOCNT >> 1] & 0x0080) {
+			mTimingSchedule(&hw->p->timing, &hw->gbpNextEvent, when);
+		}
 	}
 }

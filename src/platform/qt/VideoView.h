@@ -3,20 +3,23 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#ifndef QGBA_VIDEO_VIEW
-#define QGBA_VIDEO_VIEW
+#pragma once
 
 #ifdef USE_FFMPEG
 
 #include <QWidget>
 
+#include <memory>
+
+#include "CoreController.h"
+
 #include "ui_VideoView.h"
 
-extern "C" {
 #include "feature/ffmpeg/ffmpeg-encoder.h"
-}
 
 namespace QGBA {
+
+class CoreController;
 
 class VideoView : public QWidget {
 Q_OBJECT
@@ -28,6 +31,8 @@ public:
 	mAVStream* getStream() { return &m_encoder.d; }
 
 public slots:
+	void setController(std::shared_ptr<CoreController>);
+
 	void startRecording();
 	void stopRecording();
 	void setNativeResolution(const QSize&);
@@ -88,18 +93,18 @@ private:
 	QString m_audioCodec;
 	QString m_videoCodec;
 	QString m_container;
-	char* m_audioCodecCstr;
-	char* m_videoCodecCstr;
-	char* m_containerCstr;
+	char* m_audioCodecCstr = nullptr;
+	char* m_videoCodecCstr = nullptr;
+	char* m_containerCstr = nullptr;
 
 	int m_abr;
 	int m_vbr;
 
-	int m_width;
-	int m_height;
+	int m_width = 1;
+	int m_height = 1;
 
-	int m_nativeWidth;
-	int m_nativeHeight;
+	int m_nativeWidth = 0;
+	int m_nativeHeight = 0;
 
 	QMap<QAbstractButton*, Preset> m_presets;
 
@@ -109,7 +114,5 @@ private:
 };
 
 }
-
-#endif
 
 #endif

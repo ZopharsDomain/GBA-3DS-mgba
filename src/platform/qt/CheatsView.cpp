@@ -6,24 +6,22 @@
 #include "CheatsView.h"
 
 #include "GBAApp.h"
-#include "GameController.h"
+#include "CoreController.h"
 
 #include <QClipboard>
 #include <QPushButton>
 
-extern "C" {
-#include "core/cheats.h"
+#include <mgba/core/cheats.h>
 #ifdef M_CORE_GBA
-#include "gba/cheats.h"
+#include <mgba/internal/gba/cheats.h>
 #endif
 #ifdef M_CORE_GB
-#include "gb/cheats.h"
+#include <mgba/internal/gb/cheats.h>
 #endif
-}
 
 using namespace QGBA;
 
-CheatsView::CheatsView(GameController* controller, QWidget* parent)
+CheatsView::CheatsView(std::shared_ptr<CoreController> controller, QWidget* parent)
 	: QWidget(parent)
 	, m_controller(controller)
 	, m_model(controller->cheatDevice())
@@ -33,12 +31,12 @@ CheatsView::CheatsView(GameController* controller, QWidget* parent)
 	m_ui.cheatList->installEventFilter(this);
 	m_ui.cheatList->setModel(&m_model);
 
-	connect(m_ui.load, SIGNAL(clicked()), this, SLOT(load()));
-	connect(m_ui.save, SIGNAL(clicked()), this, SLOT(save()));
-	connect(m_ui.addSet, SIGNAL(clicked()), this, SLOT(addSet()));
-	connect(m_ui.remove, SIGNAL(clicked()), this, SLOT(removeSet()));
-	connect(controller, SIGNAL(gameStopped(mCoreThread*)), this, SLOT(close()));
-	connect(controller, SIGNAL(stateLoaded(mCoreThread*)), &m_model, SLOT(invalidated()));
+	connect(m_ui.load, &QPushButton::clicked, this, &CheatsView::load);
+	connect(m_ui.save, &QPushButton::clicked, this, &CheatsView::save);
+	connect(m_ui.addSet, &QPushButton::clicked, this, &CheatsView::addSet);
+	connect(m_ui.remove, &QPushButton::clicked, this, &CheatsView::removeSet);
+	connect(controller.get(), &CoreController::stopping, this, &CheatsView::close);
+	connect(controller.get(), &CoreController::stateLoaded, &m_model, &CheatsModel::invalidated);
 
 	QPushButton* add;
 	switch (controller->platform()) {
@@ -48,19 +46,19 @@ CheatsView::CheatsView(GameController* controller, QWidget* parent)
 			enterCheat(GBA_CHEAT_AUTODETECT);
 		});
 
-		add = new QPushButton("Add GameShark");
+		add = new QPushButton(tr("Add GameShark"));
 		m_ui.gridLayout->addWidget(add, m_ui.gridLayout->rowCount(), 2, 1, 2);
 		connect(add, &QPushButton::clicked, [this]() {
 			enterCheat(GBA_CHEAT_GAMESHARK);
 		});
 
-		add = new QPushButton("Add Pro Action Replay");
+		add = new QPushButton(tr("Add Pro Action Replay"));
 		m_ui.gridLayout->addWidget(add, m_ui.gridLayout->rowCount(), 2, 1, 2);
 		connect(add, &QPushButton::clicked, [this]() {
 			enterCheat(GBA_CHEAT_PRO_ACTION_REPLAY);
 		});
 
-		add = new QPushButton("Add CodeBreaker");
+		add = new QPushButton(tr("Add CodeBreaker"));
 		m_ui.gridLayout->addWidget(add, m_ui.gridLayout->rowCount(), 2, 1, 2);
 		connect(add, &QPushButton::clicked, [this]() {
 			enterCheat(GBA_CHEAT_CODEBREAKER);
@@ -73,13 +71,13 @@ CheatsView::CheatsView(GameController* controller, QWidget* parent)
 			enterCheat(GB_CHEAT_AUTODETECT);
 		});
 
-		add = new QPushButton("Add GameShark");
+		add = new QPushButton(tr("Add GameShark"));
 		m_ui.gridLayout->addWidget(add, m_ui.gridLayout->rowCount(), 2, 1, 2);
 		connect(add, &QPushButton::clicked, [this]() {
 			enterCheat(GB_CHEAT_GAMESHARK);
 		});
 
-		add = new QPushButton("Add GameGenie");
+		add = new QPushButton(tr("Add GameGenie"));
 		m_ui.gridLayout->addWidget(add, m_ui.gridLayout->rowCount(), 2, 1, 2);
 		connect(add, &QPushButton::clicked, [this]() {
 			enterCheat(GB_CHEAT_GAME_GENIE);
@@ -111,21 +109,21 @@ bool CheatsView::eventFilter(QObject* object, QEvent* event) {
 }
 
 void CheatsView::load() {
-	QString filename = GBAApp::app()->getOpenFileName(this, tr("Select cheats file"));
+	QString filename = GBAApp::app()->getOpenFileName(this, tr("Select cheats file"), tr(("Cheats file (*.cheats *.cht *.clt)")));
 	if (!filename.isEmpty()) {
 		m_model.loadFile(filename);
 	}
 }
 
 void CheatsView::save() {
-	QString filename = GBAApp::app()->getSaveFileName(this, tr("Select cheats file"));
+	QString filename = GBAApp::app()->getSaveFileName(this, tr("Select cheats file"), tr(("Cheats file (*.cheats *.cht *.clt)")));
 	if (!filename.isEmpty()) {
 		m_model.saveFile(filename);
 	}
 }
 
 void CheatsView::addSet() {
-	GameController::Interrupter interrupter(m_controller);
+	CoreController::Interrupter interrupter(m_controller);
 	mCheatSet* set = m_controller->cheatDevice()->createSet(m_controller->cheatDevice(), nullptr);
 	m_model.addSet(set);
 }
@@ -136,7 +134,7 @@ void CheatsView::removeSet() {
 	if (selection.count() < 1) {
 		return;
 	}
-	GameController::Interrupter interrupter(m_controller);
+	CoreController::Interrupter interrupter(m_controller);
 	for (const QModelIndex& index : selection) {
 		m_model.removeAt(selection[0]);
 	}
@@ -156,7 +154,7 @@ void CheatsView::enterCheat(int codeType) {
 	if (!set) {
 		return;
 	}
-	m_controller->threadInterrupt();
+	CoreController::Interrupter interrupter(m_controller);
 	if (selection.count() == 0) {
 		m_model.addSet(set);
 		index = m_model.index(m_model.rowCount() - 1, 0, QModelIndex());
@@ -169,6 +167,5 @@ void CheatsView::enterCheat(int codeType) {
 		m_model.endAppendRow();
 	}
 	set->refresh(set, m_controller->cheatDevice());
-	m_controller->threadContinue();
 	m_ui.codeEntry->clear();
 }

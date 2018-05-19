@@ -6,11 +6,21 @@
 #ifndef SDL_AUDIO_H
 #define SDL_AUDIO_H
 
-#include "util/common.h"
+#include <mgba-util/common.h>
 
-#include "core/log.h"
+CXX_GUARD_START
+
+#include <mgba/core/log.h>
 
 #include <SDL.h>
+// Altivec sometimes defines this
+#ifdef vector
+#undef vector
+#endif
+#ifdef bool
+#undef bool
+#define bool _Bool
+#endif
 
 mLOG_DECLARE_CATEGORY(SDL_AUDIO);
 
@@ -35,5 +45,7 @@ bool mSDLInitAudio(struct mSDLAudio* context, struct mCoreThread*);
 void mSDLDeinitAudio(struct mSDLAudio* context);
 void mSDLPauseAudio(struct mSDLAudio* context);
 void mSDLResumeAudio(struct mSDLAudio* context);
+
+CXX_GUARD_END
 
 #endif

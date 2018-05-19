@@ -24,17 +24,18 @@
 
 #import "mGBAGameCore.h"
 
-#include "util/common.h"
+#include <mgba-util/common.h>
 
-#include "core/serialize.h"
-#include "core/core.h"
-#include "gba/cheats.h"
-#include "gba/core.h"
-#include "gba/gba.h"
-#include "gba/input.h"
-#include "util/circle-buffer.h"
-#include "util/memory.h"
-#include "util/vfs.h"
+#include <mgba/core/blip_buf.h>
+#include <mgba/core/core.h>
+#include <mgba/core/cheats.h>
+#include <mgba/core/serialize.h>
+#include <mgba/gba/core.h>
+#include <mgba/internal/gba/cheats.h>
+#include <mgba/internal/gba/input.h>
+#include <mgba-util/circle-buffer.h>
+#include <mgba-util/memory.h>
+#include <mgba-util/vfs.h>
 
 #import <OpenEmuBase/OERingBuffer.h>
 #import "OEGBASystemResponderClient.h"
@@ -64,13 +65,9 @@
 		};
 		mCoreConfigLoadDefaults(&core->config, &opts);
 		core->init(core);
+		outputBuffer = nil;
 
-		unsigned width, height;
-		core->desiredVideoDimensions(core, &width, &height);
-		outputBuffer = malloc(width * height * BYTES_PER_PIXEL);
-		core->setVideoBuffer(core, outputBuffer, width);
 		core->setAudioBufferSize(core, SAMPLES);
-
 		cheatSets = [[NSMutableDictionary alloc] init];
 	}
 
@@ -107,6 +104,15 @@
 	mCoreAutoloadSave(core);
 
 	core->reset(core);
+
+	unsigned width, height;
+	core->desiredVideoDimensions(core, &width, &height);
+	if (outputBuffer) {
+		free(outputBuffer);
+	}
+	outputBuffer = malloc(width * height * BYTES_PER_PIXEL);
+	core->setVideoBuffer(core, outputBuffer, width);
+
 	return YES;
 }
 
@@ -129,8 +135,8 @@
 
 - (void)setupEmulation
 {
-	blip_set_rates(core->getAudioChannel(core, 0), GBA_ARM7TDMI_FREQUENCY, 32768);
-	blip_set_rates(core->getAudioChannel(core, 1), GBA_ARM7TDMI_FREQUENCY, 32768);
+	blip_set_rates(core->getAudioChannel(core, 0), core->frequency(core), 32768);
+	blip_set_rates(core->getAudioChannel(core, 1), core->frequency(core), 32768);
 }
 
 #pragma mark - Video
@@ -176,7 +182,7 @@
 
 - (NSTimeInterval)frameInterval
 {
-	return GBA_ARM7TDMI_FREQUENCY / (double) VIDEO_TOTAL_LENGTH;
+	return core->frequency(core) / (double) core->frameCycles(core);
 }
 
 #pragma mark - Audio

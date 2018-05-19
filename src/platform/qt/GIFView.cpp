@@ -7,10 +7,14 @@
 
 #ifdef USE_MAGICK
 
+#include "CoreController.h"
 #include "GBAApp.h"
 #include "LogController.h"
 
 #include <QMap>
+
+#include <mgba/internal/gba/gba.h>
+#include <mgba/internal/gba/video.h>
 
 using namespace QGBA;
 
@@ -19,20 +23,27 @@ GIFView::GIFView(QWidget* parent)
 {
 	m_ui.setupUi(this);
 
-	connect(m_ui.start, SIGNAL(clicked()), this, SLOT(startRecording()));
-	connect(m_ui.stop, SIGNAL(clicked()), this, SLOT(stopRecording()));
+	connect(m_ui.start, &QAbstractButton::clicked, this, &GIFView::startRecording);
+	connect(m_ui.stop, &QAbstractButton::clicked, this, &GIFView::stopRecording);
 
-	connect(m_ui.selectFile, SIGNAL(clicked()), this, SLOT(selectFile()));
-	connect(m_ui.filename, SIGNAL(textChanged(const QString&)), this, SLOT(setFilename(const QString&)));
+	connect(m_ui.selectFile, &QAbstractButton::clicked, this, &GIFView::selectFile);
+	connect(m_ui.filename, &QLineEdit::textChanged, this, &GIFView::setFilename);
 
-	connect(m_ui.frameskip, SIGNAL(valueChanged(int)), this, SLOT(updateDelay()));
-	connect(m_ui.delayAuto, SIGNAL(clicked(bool)), this, SLOT(updateDelay()));
+	connect(m_ui.frameskip, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged),
+	        this, &GIFView::updateDelay);
+	connect(m_ui.delayAuto, &QAbstractButton::clicked, this, &GIFView::updateDelay);
 
 	ImageMagickGIFEncoderInit(&m_encoder);
 }
 
 GIFView::~GIFView() {
 	stopRecording();
+}
+
+void GIFView::setController(std::shared_ptr<CoreController> controller) {
+	connect(controller.get(), &CoreController::stopping, this, &GIFView::stopRecording);
+	connect(this, &GIFView::recordingStarted, controller.get(), &CoreController::setAVStream);
+	connect(this, &GIFView::recordingStopped, controller.get(), &CoreController::clearAVStream, Qt::DirectConnection);
 }
 
 void GIFView::startRecording() {

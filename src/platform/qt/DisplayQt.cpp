@@ -5,30 +5,42 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "DisplayQt.h"
 
+#include "CoreController.h"
+
 #include <QPainter>
 
-extern "C" {
-#include "core/core.h"
-#include "core/thread.h"
-}
+#include <mgba/core/core.h>
+#include <mgba/core/thread.h>
+#include <mgba-util/math.h>
 
 using namespace QGBA;
 
 DisplayQt::DisplayQt(QWidget* parent)
 	: Display(parent)
-	, m_isDrawing(false)
-	, m_backing(nullptr)
 {
 }
 
-void DisplayQt::startDrawing(mCoreThread* context) {
-	context->core->desiredVideoDimensions(context->core, &m_width, &m_height);
+void DisplayQt::startDrawing(std::shared_ptr<CoreController> controller) {
+	QSize size = controller->screenDimensions();
+	m_width = size.width();
+	m_height = size.height();
 	m_backing = std::move(QImage());
 	m_isDrawing = true;
+	m_context = controller;
+}
+
+void DisplayQt::stopDrawing() {
+	m_isDrawing = false;
+	m_context.reset();
 }
 
 void DisplayQt::lockAspectRatio(bool lock) {
 	Display::lockAspectRatio(lock);
+	update();
+}
+
+void DisplayQt::lockIntegerScaling(bool lock) {
+	Display::lockIntegerScaling(lock);
 	update();
 }
 
@@ -37,8 +49,9 @@ void DisplayQt::filter(bool filter) {
 	update();
 }
 
-void DisplayQt::framePosted(const uint32_t* buffer) {
+void DisplayQt::framePosted() {
 	update();
+	color_t* buffer = m_context->drawContext();
 	if (const_cast<const QImage&>(m_backing).bits() == reinterpret_cast<const uchar*>(buffer)) {
 		return;
 	}
@@ -49,7 +62,8 @@ void DisplayQt::framePosted(const uint32_t* buffer) {
 	m_backing = QImage(reinterpret_cast<const uchar*>(buffer), m_width, m_height, QImage::Format_RGB555);
 #endif
 #else
-	m_backing = QImage(reinterpret_cast<const uchar*>(buffer), m_width, m_height, QImage::Format_RGB32);
+	m_backing = QImage(reinterpret_cast<const uchar*>(buffer), m_width, m_height, QImage::Format_ARGB32);
+	m_backing = m_backing.convertToFormat(QImage::Format_RGB32);
 #endif
 }
 
@@ -67,6 +81,10 @@ void DisplayQt::paintEvent(QPaintEvent*) {
 		} else if (s.width() * m_height < s.height() * m_width) {
 			ds.setHeight(s.width() * m_height / m_width);
 		}
+	}
+	if (isIntegerScalingLocked()) {
+		ds.setWidth(ds.width() - ds.width() % m_width);
+		ds.setHeight(ds.height() - ds.height() % m_height);
 	}
 	QPoint origin = QPoint((s.width() - ds.width()) / 2, (s.height() - ds.height()) / 2);
 	QRect full(origin, ds);

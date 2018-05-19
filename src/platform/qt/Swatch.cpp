@@ -8,16 +8,13 @@
 #include <QMouseEvent>
 #include <QPainter>
 
-extern "C" {
-#include "core/interface.h"
-}
+#include <mgba/core/interface.h>
 
 using namespace QGBA;
 
 Swatch::Swatch(QWidget* parent)
 	: QWidget(parent)
 {
-	m_size = 10;
 }
 
 void Swatch::setSize(int size) {
@@ -42,6 +39,14 @@ void Swatch::setColor(int index, uint16_t color) {
 		M_R8(color),
 		M_G8(color),
 		M_B8(color));
+	updateFill(index);
+}
+
+void Swatch::setColor(int index, uint32_t color) {
+	m_colors[index].setRgb(
+		(color >> 0) & 0xFF,
+		(color >> 8) & 0xFF,
+		(color >> 16) & 0xFF);
 	updateFill(index);
 }
 

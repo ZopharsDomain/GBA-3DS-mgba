@@ -3,19 +3,24 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#include "debugger.h"
+#include <mgba/debugger/debugger.h>
 
-#include "core/core.h"
+#include <mgba/core/core.h>
 
-#include "debugger/cli-debugger.h"
+#include <mgba/internal/debugger/cli-debugger.h>
+#include <mgba/internal/debugger/symbols.h>
 
 #ifdef USE_GDB_STUB
-#include "debugger/gdb-stub.h"
+#include <mgba/internal/debugger/gdb-stub.h>
+#endif
+
+#if ENABLE_SCRIPTING
+#include <mgba/core/scripting.h>
 #endif
 
 const uint32_t DEBUGGER_ID = 0xDEADBEEF;
 
-mLOG_DEFINE_CATEGORY(DEBUGGER, "Debugger");
+mLOG_DEFINE_CATEGORY(DEBUGGER, "Debugger", "core.debugger");
 
 static void mDebuggerInit(void* cpu, struct mCPUComponent* component);
 static void mDebuggerDeinit(struct mCPUComponent* component);
@@ -34,6 +39,7 @@ struct mDebugger* mDebuggerCreate(enum mDebuggerType type, struct mCore* core) {
 	};
 
 	union DebugUnion* debugger = malloc(sizeof(union DebugUnion));
+	memset(debugger, 0, sizeof(*debugger));
 
 	switch (type) {
 	case DEBUGGER_CLI:
@@ -62,6 +68,9 @@ void mDebuggerAttach(struct mDebugger* debugger, struct mCore* core) {
 	debugger->d.init = mDebuggerInit;
 	debugger->d.deinit = mDebuggerDeinit;
 	debugger->core = core;
+	if (!debugger->core->symbolTable) {
+		debugger->core->loadSymbols(debugger->core, NULL);
+	}
 	debugger->platform = core->debuggerPlatform(core);
 	debugger->platform->p = debugger;
 	core->attachDebugger(core, debugger);
@@ -94,11 +103,23 @@ void mDebuggerRun(struct mDebugger* debugger) {
 	}
 }
 
+void mDebuggerRunFrame(struct mDebugger* debugger) {
+	int32_t frame = debugger->core->frameCounter(debugger->core);
+	do {
+		mDebuggerRun(debugger);
+	} while (debugger->core->frameCounter(debugger->core) == frame);
+}
+
 void mDebuggerEnter(struct mDebugger* debugger, enum mDebuggerEntryReason reason, struct mDebuggerEntryInfo* info) {
 	debugger->state = DEBUGGER_PAUSED;
 	if (debugger->platform->entered) {
 		debugger->platform->entered(debugger->platform, reason, info);
 	}
+#ifdef ENABLE_SCRIPTING
+	if (debugger->bridge) {
+		mScriptBridgeDebuggerEntered(debugger->bridge, reason, info);
+	}
+#endif
 }
 
 static void mDebuggerInit(void* cpu, struct mCPUComponent* component) {
@@ -116,4 +137,23 @@ static void mDebuggerDeinit(struct mCPUComponent* component) {
 		debugger->deinit(debugger);
 	}
 	debugger->platform->deinit(debugger->platform);
+}
+
+bool mDebuggerLookupIdentifier(struct mDebugger* debugger, const char* name, int32_t* value, int* segment) {
+	*segment = -1;
+#ifdef ENABLE_SCRIPTING
+	if (debugger->bridge && mScriptBridgeLookupSymbol(debugger->bridge, name, value)) {
+		return true;
+	}
+#endif
+	if (debugger->core->symbolTable && mDebuggerSymbolLookup(debugger->core->symbolTable, name, value, segment)) {
+		return true;
+	}
+	if (debugger->core->lookupIdentifier(debugger->core, name, value, segment)) {
+		return true;
+	}
+	if (debugger->platform && debugger->platform->getRegister(debugger->platform, name, value)) {
+		return true;
+	}
+	return false;
 }

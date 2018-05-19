@@ -44,13 +44,19 @@ AudioProcessor* AudioProcessor::create() {
 
 AudioProcessor::AudioProcessor(QObject* parent)
 	: QObject(parent)
-	, m_context(nullptr)
-	, m_samples(2048)
 {
 }
 
-void AudioProcessor::setInput(mCoreThread* input) {
+AudioProcessor::~AudioProcessor() {
+	stop();
+}
+
+void AudioProcessor::setInput(std::shared_ptr<CoreController> input) {
 	m_context = input;
+}
+
+void AudioProcessor::stop() {
+	m_context.reset();
 }
 
 void AudioProcessor::setBufferSamples(int samples) {

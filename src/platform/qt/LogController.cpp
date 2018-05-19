@@ -11,13 +11,17 @@ LogController LogController::s_global(mLOG_ALL);
 
 LogController::LogController(int levels, QObject* parent)
 	: QObject(parent)
-	, m_logLevel(levels)
 {
+	mLogFilterInit(&m_filter);
+	mLogFilterSet(&m_filter, "gba.bios", mLOG_STUB | mLOG_FATAL);
+	mLogFilterSet(&m_filter, "core.status", mLOG_ALL & ~mLOG_DEBUG);
+	m_filter.defaultLevels = levels;
+
 	if (this != &s_global) {
-		connect(&s_global, SIGNAL(logPosted(int, int, const QString&)), this, SLOT(postLog(int, int, const QString&)));
-		connect(this, SIGNAL(levelsSet(int)), &s_global, SLOT(setLevels(int)));
-		connect(this, SIGNAL(levelsEnabled(int)), &s_global, SLOT(enableLevels(int)));
-		connect(this, SIGNAL(levelsDisabled(int)), &s_global, SLOT(disableLevels(int)));
+		connect(&s_global, &LogController::logPosted, this, &LogController::postLog);
+		connect(this, &LogController::levelsSet, &s_global, &LogController::setLevels);
+		connect(this, &LogController::levelsEnabled, &s_global, &LogController::enableLevels);
+		connect(this, &LogController::levelsDisabled, &s_global, &LogController::disableLevels);
 	}
 }
 
@@ -26,24 +30,24 @@ LogController::Stream LogController::operator()(int category, int level) {
 }
 
 void LogController::postLog(int level, int category, const QString& string) {
-	if (!(m_logLevel & level)) {
+	if (!mLogFilterTest(&m_filter, category, static_cast<mLogLevel>(level))) {
 		return;
 	}
 	emit logPosted(level, category, string);
 }
 
 void LogController::setLevels(int levels) {
-	m_logLevel = levels;
+	m_filter.defaultLevels = levels;
 	emit levelsSet(levels);
 }
 
 void LogController::enableLevels(int levels) {
-	m_logLevel |= levels;
+	m_filter.defaultLevels |= levels;
 	emit levelsEnabled(levels);
 }
 
 void LogController::disableLevels(int levels) {
-	m_logLevel &= ~levels;
+	m_filter.defaultLevels &= ~levels;
 	emit levelsDisabled(levels);
 }
 
@@ -72,9 +76,9 @@ QString LogController::toString(int level) {
 }
 
 LogController::Stream::Stream(LogController* controller, int level, int category)
-	: m_log(controller)
-	, m_level(level)
+	: m_level(level)
 	, m_category(category)
+	, m_log(controller)
 {
 }
 

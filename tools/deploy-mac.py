@@ -57,7 +57,7 @@ def parseOtoolLine(line, execPath, root):
 	if not line.startswith('\t'):
 		return None, None, None, None
 	line = line[1:]
-	match = re.match('([@/].*) \(compatibility version.*\)', line)
+	match = re.match(r'(\S.*) \(compatibility version.*\)', line)
 	path = match.group(1)
 	split = splitPath(path)
 	newExecPath = ['@executable_path', '..', 'Frameworks']
@@ -96,6 +96,7 @@ def updateMachO(bin, execPath, root):
 		if os.access(newPath, os.F_OK):
 			if verbose:
 				print('Skipping copying {}, already done.'.format(oldPath))
+			newPath = None
 		elif os.path.abspath(oldPath) != os.path.abspath(newPath):
 			if verbose:
 				print('Copying {} to {}...'.format(oldPath, newPath))
@@ -111,7 +112,8 @@ def updateMachO(bin, execPath, root):
 	args = [installNameTool]
 	for path, oldExecPath, newExecPath in toUpdate:
 		if path != bin:
-			updateMachO(path, execPath, root)
+			if path:
+				updateMachO(path, execPath, root)
 			if verbose:
 				print('Updating Mach-O load from {} to {}...'.format(oldExecPath, newExecPath))
 			args.extend(['-change', oldExecPath, newExecPath])

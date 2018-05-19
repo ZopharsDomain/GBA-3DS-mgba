@@ -3,17 +3,14 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#ifndef QGBA_GBA_KEY_EDITOR
-#define QGBA_GBA_KEY_EDITOR
+#pragma once
 
 #include <QList>
 #include <QPicture>
 #include <QSet>
 #include <QWidget>
 
-extern "C" {
-#include "gba/input.h"
-}
+#include <mgba/internal/gba/input.h>
 
 class QComboBox;
 class QTimer;
@@ -32,6 +29,7 @@ public:
 
 public slots:
 	void setAll();
+	void save();
 
 protected:
 	virtual void resizeEvent(QResizeEvent*) override;
@@ -42,7 +40,6 @@ protected:
 
 private slots:
 	void setNext();
-	void save();
 	void refresh();
 #ifdef BUILD_SDL
 	void setAxisValue(int axis, int32_t value);
@@ -65,12 +62,13 @@ private:
 
 #ifdef BUILD_SDL
 	void lookupAxes(const mInputMap*);
+	void lookupHats(const mInputMap*);
 #endif
 
 	KeyEditor* keyById(GBAKey);
 
-	QComboBox* m_profileSelect;
-	QWidget* m_clear;
+	QComboBox* m_profileSelect = nullptr;
+	QWidget* m_clear = nullptr;
 	QWidget* m_buttons;
 	KeyEditor* m_keyDU;
 	KeyEditor* m_keyDD;
@@ -93,5 +91,3 @@ private:
 };
 
 }
-
-#endif

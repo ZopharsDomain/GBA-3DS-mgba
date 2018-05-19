@@ -3,14 +3,11 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#ifndef QGBA_INPUT_PROFILE
-#define QGBA_INPUT_PROFILE
+#pragma once
 
 #include "GamepadAxisEvent.h"
 
-extern "C" {
-#include "gba/interface.h"
-}
+#include <mgba/gba/interface.h>
 
 namespace QGBA {
 
@@ -96,5 +93,3 @@ private:
 };
 
 }
-
-#endif

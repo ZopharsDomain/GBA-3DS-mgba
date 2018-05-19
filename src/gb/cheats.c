@@ -3,12 +3,12 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#include "cheats.h"
+#include <mgba/internal/gb/cheats.h>
 
-#include "core/core.h"
-#include "gb/gb.h"
-#include "gb/memory.h"
-#include "util/string.h"
+#include <mgba/core/core.h>
+#include <mgba/internal/gb/gb.h>
+#include <mgba/internal/gb/memory.h>
+#include <mgba-util/string.h>
 
 DEFINE_VECTOR(GBCheatPatchList, struct GBCheatPatch);
 
@@ -244,7 +244,11 @@ bool GBCheatAddLine(struct mCheatSet* set, const char* line, int type) {
 
 static void GBCheatRefresh(struct mCheatSet* cheats, struct mCheatDevice* device) {
 	struct GBCheatSet* gbset = (struct GBCheatSet*) cheats;
-	_patchROM(device, gbset);
+	if (cheats->enabled) {
+		_patchROM(device, gbset);
+	} else {
+		_unpatchROM(device, gbset);
+	}
 }
 
 static void GBCheatSetCopyProperties(struct mCheatSet* set, struct mCheatSet* oldSet) {

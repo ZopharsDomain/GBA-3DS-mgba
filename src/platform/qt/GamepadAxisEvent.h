@@ -3,14 +3,11 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#ifndef QGBA_GAMEPAD_AXIS_EVENT
-#define QGBA_GAMEPAD_AXIS_EVENT
+#pragma once
 
 #include <QEvent>
 
-extern "C" {
-#include "gba/input.h"
-}
+#include <mgba/internal/gba/input.h>
 
 namespace QGBA {
 
@@ -44,5 +41,3 @@ private:
 };
 
 }
-
-#endif

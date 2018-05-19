@@ -3,12 +3,12 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#include "overrides.h"
+#include <mgba/internal/gba/overrides.h>
 
-#include "gba/gba.h"
-#include "gba/hardware.h"
+#include <mgba/internal/gba/gba.h>
+#include <mgba/internal/gba/hardware.h>
 
-#include "util/configuration.h"
+#include <mgba-util/configuration.h>
 
 static const struct GBACartridgeOverride _overrides[] = {
 	// Advance Wars
@@ -28,6 +28,11 @@ static const struct GBACartridgeOverride _overrides[] = {
 	{ "U32J", SAVEDATA_EEPROM, HW_RTC | HW_LIGHT_SENSOR, IDLE_LOOP_NONE, false },
 	{ "U32E", SAVEDATA_EEPROM, HW_RTC | HW_LIGHT_SENSOR, IDLE_LOOP_NONE, false },
 	{ "U32P", SAVEDATA_EEPROM, HW_RTC | HW_LIGHT_SENSOR, IDLE_LOOP_NONE, false },
+
+	// Crash Bandicoot 2 - N-Tranced
+	{ "AC8J", SAVEDATA_EEPROM, HW_NONE, IDLE_LOOP_NONE, false },
+	{ "AC8E", SAVEDATA_EEPROM, HW_NONE, IDLE_LOOP_NONE, false },
+	{ "AC8P", SAVEDATA_EEPROM, HW_NONE, IDLE_LOOP_NONE, false },
 
 	// Dragon Ball Z - The Legacy of Goku
 	{ "ALGP", SAVEDATA_EEPROM, HW_NONE, IDLE_LOOP_NONE, false },
@@ -175,6 +180,9 @@ static const struct GBACartridgeOverride _overrides[] = {
 	{ "KYGE", SAVEDATA_EEPROM, HW_TILT, IDLE_LOOP_NONE, false },
 	{ "KYGP", SAVEDATA_EEPROM, HW_TILT, IDLE_LOOP_NONE, false },
 
+	// Aging cartridge
+	{ "TCHK", SAVEDATA_EEPROM, HW_NONE, IDLE_LOOP_NONE, false },
+
 	{ { 0, 0, 0, 0 }, 0, 0, IDLE_LOOP_NONE, false }
 };
 
@@ -288,7 +296,7 @@ void GBAOverrideSave(struct Configuration* config, const struct GBACartridgeOver
 
 void GBAOverrideApply(struct GBA* gba, const struct GBACartridgeOverride* override) {
 	if (override->savetype != SAVEDATA_AUTODETECT) {
-		GBASavedataForceType(&gba->memory.savedata, override->savetype, gba->realisticTiming);
+		GBASavedataForceType(&gba->memory.savedata, override->savetype);
 	}
 
 	if (override->hardware != HW_NO_OVERRIDE) {
@@ -333,11 +341,19 @@ void GBAOverrideApply(struct GBA* gba, const struct GBACartridgeOverride* overri
 	}
 }
 
-void GBAOverrideApplyDefaults(struct GBA* gba) {
-	struct GBACartridgeOverride override;
+void GBAOverrideApplyDefaults(struct GBA* gba, const struct Configuration* overrides) {
+	struct GBACartridgeOverride override = { .idleLoop = IDLE_LOOP_NONE };
 	const struct GBACartridge* cart = (const struct GBACartridge*) gba->memory.rom;
-	memcpy(override.id, &cart->id, sizeof(override.id));
-	if (GBAOverrideFind(0, &override)) {
-		GBAOverrideApply(gba, &override);
+	if (cart) {
+		memcpy(override.id, &cart->id, sizeof(override.id));
+
+		if (!strncmp("pokemon red version", &((const char*) gba->memory.rom)[0x108], 20) && gba->romCrc32 != 0xDD88761C) {
+			// Enable FLASH1M and RTC on Pokémon FireRed ROM hacks
+			override.savetype = SAVEDATA_FLASH1M;
+			override.hardware = HW_RTC;
+			GBAOverrideApply(gba, &override);
+		} else if (GBAOverrideFind(overrides, &override)) {
+			GBAOverrideApply(gba, &override);
+		}
 	}
 }

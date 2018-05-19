@@ -3,21 +3,23 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#include "overrides.h"
+#include <mgba/internal/gb/overrides.h>
 
-#include "gb/gb.h"
+#include <mgba/internal/gb/gb.h>
+#include <mgba/internal/gb/mbc.h>
 
-#include "util/configuration.h"
-#include "util/crc32.h"
+#include <mgba-util/configuration.h>
+#include <mgba-util/crc32.h>
 
 static const struct GBCartridgeOverride _overrides[] = {
 	// None yet
-	{ 0, 0, 0 }
+	{ 0, 0, 0, { 0 } }
 };
 
 bool GBOverrideFind(const struct Configuration* config, struct GBCartridgeOverride* override) {
 	override->model = GB_MODEL_AUTODETECT;
 	override->mbc = GB_MBC_AUTODETECT;
+	memset(override->gbColors, 0, sizeof(override->gbColors));
 	bool found = false;
 
 	int i;
@@ -34,24 +36,24 @@ bool GBOverrideFind(const struct Configuration* config, struct GBCartridgeOverri
 		snprintf(sectionName, sizeof(sectionName), "gb.override.%08X", override->headerCrc32);
 		const char* model = ConfigurationGetValue(config, sectionName, "model");
 		const char* mbc = ConfigurationGetValue(config, sectionName, "mbc");
+		const char* pal[12] = {
+			ConfigurationGetValue(config, sectionName, "pal[0]"),
+			ConfigurationGetValue(config, sectionName, "pal[1]"),
+			ConfigurationGetValue(config, sectionName, "pal[2]"),
+			ConfigurationGetValue(config, sectionName, "pal[3]"),
+			ConfigurationGetValue(config, sectionName, "pal[4]"),
+			ConfigurationGetValue(config, sectionName, "pal[5]"),
+			ConfigurationGetValue(config, sectionName, "pal[6]"),
+			ConfigurationGetValue(config, sectionName, "pal[7]"),
+			ConfigurationGetValue(config, sectionName, "pal[8]"),
+			ConfigurationGetValue(config, sectionName, "pal[9]"),
+			ConfigurationGetValue(config, sectionName, "pal[10]"),
+			ConfigurationGetValue(config, sectionName, "pal[11]")
+		};
 
 		if (model) {
-			if (strcasecmp(model, "DMG") == 0) {
-				found = true;
-				override->model = GB_MODEL_DMG;
-			} else if (strcasecmp(model, "CGB") == 0) {
-				found = true;
-				override->model = GB_MODEL_CGB;
-			} else if (strcasecmp(model, "AGB") == 0) {
-				found = true;
-				override->model = GB_MODEL_AGB;
-			} else if (strcasecmp(model, "SGB") == 0) {
-				found = true;
-				override->model = GB_MODEL_DMG; // TODO
-			} else if (strcasecmp(model, "MGB") == 0) {
-				found = true;
-				override->model = GB_MODEL_DMG; // TODO
-			}
+			override->model = GBNameToModel(model);
+			found = override->model != GB_MODEL_AUTODETECT;
 		}
 
 		if (mbc) {
@@ -62,6 +64,28 @@ bool GBOverrideFind(const struct Configuration* config, struct GBCartridgeOverri
 				found = true;
 			}
 		}
+
+		for (i = 0; i < 12; ++i) {
+			if (!pal[i]) {
+				continue;
+			}
+			char* end;
+			unsigned long value = strtoul(pal[i], &end, 10);
+			if (end == &pal[i][1] && *end == 'x') {
+				value = strtoul(pal[i], &end, 16);
+			}
+			if (*end) {
+				continue;
+			}
+			value |= 0xFF000000;
+			override->gbColors[i] = value;
+			if (i < 8) {
+				override->gbColors[i + 4] = value;
+			}
+			if (i < 4) {
+				override->gbColors[i + 8] = value;
+			}
+		}
 	}
 	return found;
 }
@@ -69,24 +93,45 @@ bool GBOverrideFind(const struct Configuration* config, struct GBCartridgeOverri
 void GBOverrideSave(struct Configuration* config, const struct GBCartridgeOverride* override) {
 	char sectionName[24] = "";
 	snprintf(sectionName, sizeof(sectionName), "gb.override.%08X", override->headerCrc32);
-	const char* model = 0;
-	switch (override->model) {
-	case GB_MODEL_DMG:
-		model = "DMG";
-		break;
-	case GB_MODEL_SGB:
-		model = "SGB";
-		break;
-	case GB_MODEL_CGB:
-		model = "CGB";
-		break;
-	case GB_MODEL_AGB:
-		model = "AGB";
-		break;
-	case GB_MODEL_AUTODETECT:
-		break;
-	}
+	const char* model = GBModelToName(override->model);
 	ConfigurationSetValue(config, sectionName, "model", model);
+
+	if (override->gbColors[0] & 0xFF000000) {
+		ConfigurationSetIntValue(config, sectionName, "pal[0]", override->gbColors[0] & ~0xFF000000);
+	}
+	if (override->gbColors[1] & 0xFF000000) {
+		ConfigurationSetIntValue(config, sectionName, "pal[1]", override->gbColors[1] & ~0xFF000000);
+	}
+	if (override->gbColors[2] & 0xFF000000) {
+		ConfigurationSetIntValue(config, sectionName, "pal[2]", override->gbColors[2] & ~0xFF000000);
+	}
+	if (override->gbColors[3] & 0xFF000000) {
+		ConfigurationSetIntValue(config, sectionName, "pal[3]", override->gbColors[3] & ~0xFF000000);
+	}
+	if (override->gbColors[4] & 0xFF000000) {
+		ConfigurationSetIntValue(config, sectionName, "pal[4]", override->gbColors[4] & ~0xFF000000);
+	}
+	if (override->gbColors[5] & 0xFF000000) {
+		ConfigurationSetIntValue(config, sectionName, "pal[5]", override->gbColors[5] & ~0xFF000000);
+	}
+	if (override->gbColors[6] & 0xFF000000) {
+		ConfigurationSetIntValue(config, sectionName, "pal[6]", override->gbColors[6] & ~0xFF000000);
+	}
+	if (override->gbColors[7] & 0xFF000000) {
+		ConfigurationSetIntValue(config, sectionName, "pal[7]", override->gbColors[7] & ~0xFF000000);
+	}
+	if (override->gbColors[8] & 0xFF000000) {
+		ConfigurationSetIntValue(config, sectionName, "pal[8]", override->gbColors[8] & ~0xFF000000);
+	}
+	if (override->gbColors[9] & 0xFF000000) {
+		ConfigurationSetIntValue(config, sectionName, "pal[9]", override->gbColors[9] & ~0xFF000000);
+	}
+	if (override->gbColors[10] & 0xFF000000) {
+		ConfigurationSetIntValue(config, sectionName, "pal[10]", override->gbColors[10] & ~0xFF000000);
+	}
+	if (override->gbColors[11] & 0xFF000000) {
+		ConfigurationSetIntValue(config, sectionName, "pal[11]", override->gbColors[11] & ~0xFF000000);
+	}
 
 	if (override->mbc != GB_MBC_AUTODETECT) {
 		ConfigurationSetIntValue(config, sectionName, "mbc", override->mbc);
@@ -102,6 +147,21 @@ void GBOverrideApply(struct GB* gb, const struct GBCartridgeOverride* override) 
 
 	if (override->mbc != GB_MBC_AUTODETECT) {
 		gb->memory.mbcType = override->mbc;
+		GBMBCInit(gb);
+	}
+
+	int i;
+	for (i = 0; i < 12; ++i) {
+		if (!(override->gbColors[i] & 0xFF000000)) {
+			continue;
+		}
+		GBVideoSetPalette(&gb->video, i, override->gbColors[i]);
+		if (i < 8) {
+			GBVideoSetPalette(&gb->video, i + 4, override->gbColors[i]);
+		}
+		if (i < 4) {
+			GBVideoSetPalette(&gb->video, i + 8, override->gbColors[i]);
+		}
 	}
 }
 

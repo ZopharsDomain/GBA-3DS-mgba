@@ -3,21 +3,20 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#include "cheats.h"
+#include <mgba/core/cheats.h>
 
-#include "core/core.h"
-#include "util/string.h"
-#include "util/vfs.h"
+#include <mgba/core/core.h>
+#include <mgba-util/string.h>
+#include <mgba-util/vfs.h>
 
 #define MAX_LINE_LENGTH 128
 
 const uint32_t M_CHEAT_DEVICE_ID = 0xABADC0DE;
 
-mLOG_DEFINE_CATEGORY(CHEATS, "Cheats");
+mLOG_DEFINE_CATEGORY(CHEATS, "Cheats", "core.cheats");
 
 DEFINE_VECTOR(mCheatList, struct mCheat);
 DEFINE_VECTOR(mCheatSets, struct mCheatSet*);
-DEFINE_VECTOR(StringList, char*);
 
 static int32_t _readMem(struct mCore* core, uint32_t address, int width) {
 	switch (width) {
@@ -52,6 +51,8 @@ void mCheatDeviceCreate(struct mCheatDevice* device) {
 	device->d.id = M_CHEAT_DEVICE_ID;
 	device->d.init = mCheatDeviceInit;
 	device->d.deinit = mCheatDeviceDeinit;
+	device->autosave = false;
+	device->buttonDown = false;
 	mCheatSetsInit(&device->cheats, 4);
 }
 
@@ -253,39 +254,41 @@ bool mCheatSaveFile(struct mCheatDevice* device, struct VFile* vf) {
 	return true;
 }
 
+#if !defined(MINIMAL_CORE) || MINIMAL_CORE < 2
+void mCheatAutosave(struct mCheatDevice* device) {
+	if (!device->autosave) {
+		return;
+	}
+	struct VFile* vf = mDirectorySetOpenSuffix(&device->p->dirs, device->p->dirs.cheats, ".cheats", O_WRONLY | O_CREAT | O_TRUNC);
+	if (!vf) {
+		return;
+	}
+	mCheatSaveFile(device, vf);
+	vf->close(vf);
+}
+#endif
+
 void mCheatRefresh(struct mCheatDevice* device, struct mCheatSet* cheats) {
+	cheats->refresh(cheats, device);
 	if (!cheats->enabled) {
 		return;
 	}
-	bool condition = true;
-	int conditionRemaining = 0;
-	int negativeConditionRemaining = 0;
-	cheats->refresh(cheats, device);
 
+	size_t elseLoc = 0;
+	size_t endLoc = 0;
 	size_t nCodes = mCheatListSize(&cheats->list);
 	size_t i;
 	for (i = 0; i < nCodes; ++i) {
-		if (conditionRemaining > 0) {
-			--conditionRemaining;
-			if (!condition) {
-				continue;
-			}
-		} else if (negativeConditionRemaining > 0) {
-			conditionRemaining = negativeConditionRemaining - 1;
-			negativeConditionRemaining = 0;
-			condition = !condition;
-			if (!condition) {
-				continue;
-			}
-		} else {
-			condition = true;
-		}
 		struct mCheat* cheat = mCheatListGetPointer(&cheats->list, i);
 		int32_t value = 0;
 		int32_t operand = cheat->operand;
 		uint32_t operationsRemaining = cheat->repeat;
 		uint32_t address = cheat->address;
 		bool performAssignment = false;
+		bool condition = true;
+		int conditionRemaining = 0;
+		int negativeConditionRemaining = 0;
+
 		for (; operationsRemaining; --operationsRemaining) {
 			switch (cheat->type) {
 			case CHEAT_ASSIGN:
@@ -313,46 +316,61 @@ void mCheatRefresh(struct mCheatDevice* device, struct mCheatSet* cheats) {
 				condition = _readMem(device->p, address, cheat->width) == operand;
 				conditionRemaining = cheat->repeat;
 				negativeConditionRemaining = cheat->negativeRepeat;
+				operationsRemaining = 1;
 				break;
 			case CHEAT_IF_NE:
 				condition = _readMem(device->p, address, cheat->width) != operand;
 				conditionRemaining = cheat->repeat;
 				negativeConditionRemaining = cheat->negativeRepeat;
+				operationsRemaining = 1;
 				break;
 			case CHEAT_IF_LT:
 				condition = _readMem(device->p, address, cheat->width) < operand;
 				conditionRemaining = cheat->repeat;
 				negativeConditionRemaining = cheat->negativeRepeat;
+				operationsRemaining = 1;
 				break;
 			case CHEAT_IF_GT:
 				condition = _readMem(device->p, address, cheat->width) > operand;
 				conditionRemaining = cheat->repeat;
 				negativeConditionRemaining = cheat->negativeRepeat;
+				operationsRemaining = 1;
 				break;
 			case CHEAT_IF_ULT:
 				condition = (uint32_t) _readMem(device->p, address, cheat->width) < (uint32_t) operand;
 				conditionRemaining = cheat->repeat;
 				negativeConditionRemaining = cheat->negativeRepeat;
+				operationsRemaining = 1;
 				break;
 			case CHEAT_IF_UGT:
 				condition = (uint32_t) _readMem(device->p, address, cheat->width) > (uint32_t) operand;
 				conditionRemaining = cheat->repeat;
 				negativeConditionRemaining = cheat->negativeRepeat;
+				operationsRemaining = 1;
 				break;
 			case CHEAT_IF_AND:
 				condition = _readMem(device->p, address, cheat->width) & operand;
 				conditionRemaining = cheat->repeat;
 				negativeConditionRemaining = cheat->negativeRepeat;
+				operationsRemaining = 1;
 				break;
 			case CHEAT_IF_LAND:
 				condition = _readMem(device->p, address, cheat->width) && operand;
 				conditionRemaining = cheat->repeat;
 				negativeConditionRemaining = cheat->negativeRepeat;
+				operationsRemaining = 1;
 				break;
 			case CHEAT_IF_NAND:
 				condition = !(_readMem(device->p, address, cheat->width) & operand);
 				conditionRemaining = cheat->repeat;
 				negativeConditionRemaining = cheat->negativeRepeat;
+				operationsRemaining = 1;
+				break;
+			case CHEAT_IF_BUTTON:
+				condition = device->buttonDown;
+				conditionRemaining = cheat->repeat;
+				negativeConditionRemaining = cheat->negativeRepeat;
+				operationsRemaining = 1;
 				break;
 			}
 
@@ -363,7 +381,23 @@ void mCheatRefresh(struct mCheatDevice* device, struct mCheatSet* cheats) {
 			address += cheat->addressOffset;
 			operand += cheat->operandOffset;
 		}
+
+
+		if (elseLoc && i == elseLoc) {
+			i = endLoc;
+			endLoc = 0;
+		}
+		if (conditionRemaining > 0 && !condition) {
+			i += conditionRemaining;
+		} else if (negativeConditionRemaining > 0) {
+			elseLoc = i + conditionRemaining;
+			endLoc = elseLoc + negativeConditionRemaining;
+		}
 	}
+}
+
+void mCheatPressButton(struct mCheatDevice* device, bool down) {
+	device->buttonDown = down;
 }
 
 void mCheatDeviceInit(void* cpu, struct mCPUComponent* component) {

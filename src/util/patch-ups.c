@@ -3,11 +3,11 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#include "util/patch-ips.h"
+#include <mgba-util/patch/ips.h>
 
-#include "util/crc32.h"
-#include "util/patch.h"
-#include "util/vfs.h"
+#include <mgba-util/crc32.h>
+#include <mgba-util/patch.h>
+#include <mgba-util/vfs.h>
 
 enum {
 	IN_CHECKSUM = -12,
@@ -87,6 +87,9 @@ bool _UPSApplyPatch(struct Patch* patch, const void* in, size_t inSize, void* ou
 			if (patch->vf->read(patch->vf, &byte, 1) != 1) {
 				return false;
 			}
+			if (offset >= outSize) {
+				return false;
+			}
 			buf[offset] ^= byte;
 			++offset;
 			if (!byte) {
@@ -151,7 +154,7 @@ bool _BPSApplyPatch(struct Patch* patch, const void* in, size_t inSize, void* ou
 		case 0x0:
 			// SourceRead
 			memmove(&writeBuffer[writeLocation], &readBuffer[writeLocation], length);
-			outputChecksum = updateCrc32(outputChecksum, &writeBuffer[writeLocation], length);
+			outputChecksum = crc32(outputChecksum, &writeBuffer[writeLocation], length);
 			writeLocation += length;
 			break;
 		case 0x1:
@@ -159,7 +162,7 @@ bool _BPSApplyPatch(struct Patch* patch, const void* in, size_t inSize, void* ou
 			if (patch->vf->read(patch->vf, &writeBuffer[writeLocation], length) != (ssize_t) length) {
 				return false;
 			}
-			outputChecksum = updateCrc32(outputChecksum, &writeBuffer[writeLocation], length);
+			outputChecksum = crc32(outputChecksum, &writeBuffer[writeLocation], length);
 			writeLocation += length;
 			break;
 		case 0x2:
@@ -174,7 +177,7 @@ bool _BPSApplyPatch(struct Patch* patch, const void* in, size_t inSize, void* ou
 				return false;
 			}
 			memmove(&writeBuffer[writeLocation], &readBuffer[readSourceLocation], length);
-			outputChecksum = updateCrc32(outputChecksum, &writeBuffer[writeLocation], length);
+			outputChecksum = crc32(outputChecksum, &writeBuffer[writeLocation], length);
 			writeLocation += length;
 			readSourceLocation += length;
 			break;
@@ -195,7 +198,7 @@ bool _BPSApplyPatch(struct Patch* patch, const void* in, size_t inSize, void* ou
 				++writeLocation;
 				++readTargetLocation;
 			}
-			outputChecksum = updateCrc32(outputChecksum, &writeBuffer[writeLocation - length], length);
+			outputChecksum = crc32(outputChecksum, &writeBuffer[writeLocation - length], length);
 			break;
 		}
 	}

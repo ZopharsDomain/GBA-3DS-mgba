@@ -3,8 +3,7 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#ifndef QGBA_SHORTCUT_VIEW
-#define QGBA_SHORTCUT_VIEW
+#pragma once
 
 #include "GamepadAxisEvent.h"
 
@@ -40,10 +39,8 @@ private slots:
 private:
 	Ui::ShortcutView m_ui;
 
-	ShortcutController* m_controller;
-	InputController* m_input;
+	ShortcutController* m_controller = nullptr;
+	InputController* m_input = nullptr;
 };
 
 }
-
-#endif

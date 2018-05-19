@@ -3,8 +3,7 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#ifndef QGBA_MESSAGE_PAINTER
-#define QGBA_MESSAGE_PAINTER
+#pragma once
 
 #include <QMutex>
 #include <QObject>
@@ -35,13 +34,11 @@ private:
 	QStaticText m_message;
 	QPixmap m_pixmap;
 	QPixmap m_pixmapBuffer;
-	QTimer m_messageTimer;
+	QTimer m_messageTimer{this};
 	QPoint m_local;
 	QTransform m_world;
 	QFont m_messageFont;
-	qreal m_scaleFactor;
+	qreal m_scaleFactor = 1;
 };
 
 }
-
-#endif

@@ -9,15 +9,18 @@
 #include "GamepadAxisEvent.h"
 #include "GamepadButtonEvent.h"
 #include "InputProfile.h"
+#include "LogController.h"
 
 #include <QApplication>
 #include <QTimer>
 #include <QWidget>
+#ifdef BUILD_QT_MULTIMEDIA
+#include <QCamera>
+#include <QVideoSurfaceFormat>
+#endif
 
-extern "C" {
-#include "core/interface.h"
-#include "util/configuration.h"
-}
+#include <mgba/core/interface.h>
+#include <mgba-util/configuration.h>
 
 using namespace QGBA;
 
@@ -29,12 +32,6 @@ mSDLEvents InputController::s_sdlEvents;
 InputController::InputController(int playerId, QWidget* topLevel, QObject* parent)
 	: QObject(parent)
 	, m_playerId(playerId)
-	, m_config(nullptr)
-	, m_gamepadTimer(nullptr)
-#ifdef BUILD_SDL
-	, m_playerAttached(false)
-#endif
-	, m_allowOpposing(false)
 	, m_topLevel(topLevel)
 	, m_focusParent(topLevel)
 {
@@ -50,14 +47,20 @@ InputController::InputController(int playerId, QWidget* topLevel, QObject* paren
 	updateJoysticks();
 #endif
 
-	m_gamepadTimer = new QTimer(this);
 #ifdef BUILD_SDL
-	connect(m_gamepadTimer, &QTimer::timeout, [this]() {
+	connect(&m_gamepadTimer, &QTimer::timeout, [this]() {
 		testGamepad(SDL_BINDING_BUTTON);
+		if (m_playerId == 0) {
+			updateJoysticks();
+		}
 	});
 #endif
-	m_gamepadTimer->setInterval(50);
-	m_gamepadTimer->start();
+	m_gamepadTimer.setInterval(50);
+	m_gamepadTimer.start();
+
+#ifdef BUILD_QT_MULTIMEDIA
+	connect(&m_videoDumper, &VideoDumper::imageAvailable, this, &InputController::setCamImage);
+#endif
 
 	mInputBindKey(&m_inputMap, KEYBOARD, Qt::Key_X, GBA_KEY_A);
 	mInputBindKey(&m_inputMap, KEYBOARD, Qt::Key_Z, GBA_KEY_B);
@@ -69,6 +72,67 @@ InputController::InputController(int playerId, QWidget* topLevel, QObject* paren
 	mInputBindKey(&m_inputMap, KEYBOARD, Qt::Key_Down, GBA_KEY_DOWN);
 	mInputBindKey(&m_inputMap, KEYBOARD, Qt::Key_Left, GBA_KEY_LEFT);
 	mInputBindKey(&m_inputMap, KEYBOARD, Qt::Key_Right, GBA_KEY_RIGHT);
+
+
+#ifdef M_CORE_GBA
+	m_lux.p = this;
+	m_lux.sample = [](GBALuminanceSource* context) {
+		InputControllerLux* lux = static_cast<InputControllerLux*>(context);
+		lux->value = 0xFF - lux->p->m_luxValue;
+	};
+
+	m_lux.readLuminance = [](GBALuminanceSource* context) {
+		InputControllerLux* lux = static_cast<InputControllerLux*>(context);
+		return lux->value;
+	};
+	setLuminanceLevel(0);
+#endif
+
+	m_image.p = this;
+	m_image.startRequestImage = [](mImageSource* context, unsigned w, unsigned h, int) {
+		InputControllerImage* image = static_cast<InputControllerImage*>(context);
+		image->w = w;
+		image->h = h;
+		if (image->image.isNull()) {
+			image->image.load(":/res/no-cam.png");
+		}
+#ifdef BUILD_QT_MULTIMEDIA
+		if (image->p->m_config->getQtOption("cameraDriver").toInt() == static_cast<int>(CameraDriver::QT_MULTIMEDIA)) {
+			QMetaObject::invokeMethod(image->p, "setupCam");
+		}
+#endif
+	};
+
+	m_image.stopRequestImage = [](mImageSource* context) {
+		InputControllerImage* image = static_cast<InputControllerImage*>(context);
+#ifdef BUILD_QT_MULTIMEDIA
+		QMetaObject::invokeMethod(image->p, "teardownCam");
+#endif
+	};
+
+	m_image.requestImage = [](mImageSource* context, const void** buffer, size_t* stride, mColorFormat* format) {
+		InputControllerImage* image = static_cast<InputControllerImage*>(context);
+		QSize size;
+		{
+			QMutexLocker locker(&image->mutex);
+			if (image->outOfDate) {
+				image->resizedImage = image->image.scaled(image->w, image->h, Qt::KeepAspectRatioByExpanding);
+				image->resizedImage = image->resizedImage.convertToFormat(QImage::Format_RGB16);
+				image->outOfDate = false;
+			}
+		}
+		size = image->resizedImage.size();
+		const uint16_t* bits = reinterpret_cast<const uint16_t*>(image->resizedImage.constBits());
+		if (size.width() > image->w) {
+			bits += (size.width() - image->w) / 2;
+		}
+		if (size.height() > image->h) {
+			bits += ((size.height() - image->h) / 2) * size.width();
+		}
+		*buffer = bits;
+		*stride = image->resizedImage.bytesPerLine() / sizeof(*bits);
+		*format = mCOLOR_RGB565;
+	};
 }
 
 InputController::~InputController() {
@@ -88,7 +152,6 @@ InputController::~InputController() {
 
 void InputController::setConfiguration(ConfigController* config) {
 	m_config = config;
-	setAllowOpposing(config->getOption("allowOpposingDirections").toInt());
 	loadConfiguration(KEYBOARD);
 #ifdef BUILD_SDL
 	mSDLEventsLoadConfig(&s_sdlEvents, config->input());
@@ -129,8 +192,8 @@ void InputController::saveConfiguration() {
 	if (m_playerAttached) {
 		mSDLPlayerSaveConfig(&m_sdlPlayer, m_config->input());
 	}
-	m_config->write();
 #endif
+	m_config->write();
 }
 
 void InputController::saveConfiguration(uint32_t type) {
@@ -286,7 +349,12 @@ void InputController::bindKey(uint32_t type, int key, GBAKey gbaKey) {
 
 void InputController::updateJoysticks() {
 #ifdef BUILD_SDL
-	mSDLUpdateJoysticks(&s_sdlEvents);
+	QString profile = profileForType(SDL_BINDING_BUTTON);
+	mSDLUpdateJoysticks(&s_sdlEvents, m_config->input());
+	QString newProfile = profileForType(SDL_BINDING_BUTTON);
+	if (profile != newProfile) {
+		loadProfile(SDL_BINDING_BUTTON, newProfile);
+	}
 #endif
 }
 
@@ -313,18 +381,7 @@ int InputController::pollEvents() {
 		int numHats = SDL_JoystickNumHats(joystick);
 		for (i = 0; i < numHats; ++i) {
 			int hat = SDL_JoystickGetHat(joystick, i);
-			if (hat & SDL_HAT_UP) {
-				activeButtons |= 1 << GBA_KEY_UP;
-			}
-			if (hat & SDL_HAT_LEFT) {
-				activeButtons |= 1 << GBA_KEY_LEFT;
-			}
-			if (hat & SDL_HAT_DOWN) {
-				activeButtons |= 1 << GBA_KEY_DOWN;
-			}
-			if (hat & SDL_HAT_RIGHT) {
-				activeButtons |= 1 << GBA_KEY_RIGHT;
-			}
+			activeButtons |= mInputMapHat(&m_inputMap, SDL_BINDING_BUTTON, i, hat);
 		}
 
 		int numAxes = SDL_JoystickNumAxes(joystick);
@@ -431,6 +488,60 @@ void InputController::unbindAllAxes(uint32_t type) {
 	mInputUnbindAllAxes(&m_inputMap, type);
 }
 
+QSet<QPair<int, GamepadHatEvent::Direction>> InputController::activeGamepadHats(int type) {
+	QSet<QPair<int, GamepadHatEvent::Direction>> activeHats;
+#ifdef BUILD_SDL
+	if (m_playerAttached && type == SDL_BINDING_BUTTON && m_sdlPlayer.joystick) {
+		SDL_Joystick* joystick = m_sdlPlayer.joystick->joystick;
+		SDL_JoystickUpdate();
+		int numHats = SDL_JoystickNumHats(joystick);
+		if (numHats < 1) {
+			return activeHats;
+		}
+
+		int i;
+		for (i = 0; i < numHats; ++i) {
+			int hat = SDL_JoystickGetHat(joystick, i);
+			if (hat & GamepadHatEvent::UP) {
+				activeHats.insert(qMakePair(i, GamepadHatEvent::UP));
+			}
+			if (hat & GamepadHatEvent::RIGHT) {
+				activeHats.insert(qMakePair(i, GamepadHatEvent::RIGHT));
+			}
+			if (hat & GamepadHatEvent::DOWN) {
+				activeHats.insert(qMakePair(i, GamepadHatEvent::DOWN));
+			}
+			if (hat & GamepadHatEvent::LEFT) {
+				activeHats.insert(qMakePair(i, GamepadHatEvent::LEFT));
+			}
+		}
+	}
+#endif
+	return activeHats;
+}
+
+void InputController::bindHat(uint32_t type, int hat, GamepadHatEvent::Direction direction, GBAKey gbaKey) {
+	mInputHatBindings bindings{ -1, -1, -1, -1 };
+	mInputQueryHat(&m_inputMap, type, hat, &bindings);
+	switch (direction) {
+	case GamepadHatEvent::UP:
+		bindings.up = gbaKey;
+		break;
+	case GamepadHatEvent::RIGHT:
+		bindings.right = gbaKey;
+		break;
+	case GamepadHatEvent::DOWN:
+		bindings.down = gbaKey;
+		break;
+	case GamepadHatEvent::LEFT:
+		bindings.left = gbaKey;
+		break;
+	default:
+		return;
+	}
+	mInputBindHat(&m_inputMap, type, hat, &bindings);
+}
+
 void InputController::testGamepad(int type) {
 	auto activeAxes = activeGamepadAxes(type);
 	auto oldAxes = m_activeAxes;
@@ -439,6 +550,10 @@ void InputController::testGamepad(int type) {
 	auto activeButtons = activeGamepadButtons(type);
 	auto oldButtons = m_activeButtons;
 	m_activeButtons = activeButtons;
+
+	auto activeHats = activeGamepadHats(type);
+	auto oldHats = m_activeHats;
+	m_activeHats = activeHats;
 
 	if (!QApplication::focusWidget()) {
 		return;
@@ -481,6 +596,23 @@ void InputController::testGamepad(int type) {
 	}
 	for (int button : oldButtons) {
 		GamepadButtonEvent* event = new GamepadButtonEvent(GamepadButtonEvent::Up(), button, type, this);
+		clearPendingEvent(event->gbaKey());
+		sendGamepadEvent(event);
+	}
+
+	activeHats.subtract(oldHats);
+	oldHats.subtract(m_activeHats);
+
+	for (auto& hat : activeHats) {
+		GamepadHatEvent* event = new GamepadHatEvent(GamepadHatEvent::Down(), hat.first, hat.second, type, this);
+		postPendingEvent(event->gbaKey());
+		sendGamepadEvent(event);
+		if (!event->isAccepted()) {
+			clearPendingEvent(event->gbaKey());
+		}
+	}
+	for (auto& hat : oldHats) {
+		GamepadHatEvent* event = new GamepadHatEvent(GamepadHatEvent::Up(), hat.first, hat.second, type, this);
 		clearPendingEvent(event->gbaKey());
 		sendGamepadEvent(event);
 	}
@@ -543,4 +675,99 @@ void InputController::releaseFocus(QWidget* focus) {
 	if (focus == m_focusParent) {
 		m_focusParent = m_topLevel;
 	}
+}
+
+void InputController::loadCamImage(const QString& path) {
+	QMutexLocker locker(&m_image.mutex);
+	m_image.image.load(path);
+	m_image.resizedImage = QImage();
+	m_image.outOfDate = true;
+}
+
+void InputController::setCamImage(const QImage& image) {
+	QMutexLocker locker(&m_image.mutex);
+	m_image.image = image;
+	m_image.resizedImage = QImage();
+	m_image.outOfDate = true;
+}
+
+void InputController::increaseLuminanceLevel() {
+	setLuminanceLevel(m_luxLevel + 1);
+}
+
+void InputController::decreaseLuminanceLevel() {
+	setLuminanceLevel(m_luxLevel - 1);
+}
+
+void InputController::setLuminanceLevel(int level) {
+	int value = 0x16;
+	level = std::max(0, std::min(10, level));
+	if (level > 0) {
+		value += GBA_LUX_LEVELS[level - 1];
+	}
+	setLuminanceValue(value);
+}
+
+void InputController::setLuminanceValue(uint8_t value) {
+	m_luxValue = value;
+	value = std::max<int>(value - 0x16, 0);
+	m_luxLevel = 10;
+	for (int i = 0; i < 10; ++i) {
+		if (value < GBA_LUX_LEVELS[i]) {
+			m_luxLevel = i;
+			break;
+		}
+	}
+	emit luminanceValueChanged(m_luxValue);
+}
+
+void InputController::setupCam() {
+#ifdef BUILD_QT_MULTIMEDIA
+	if (!m_camera) {
+		m_camera = std::make_unique<QCamera>();
+	}
+	QVideoFrame::PixelFormat format(QVideoFrame::Format_RGB32);
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 5, 0))
+	m_camera->load();
+	QCameraViewfinderSettings settings;
+	QSize size(1920, 1080);
+	auto cameraRes = m_camera->supportedViewfinderResolutions(settings);
+	for (auto& cameraSize : cameraRes) {
+		if (cameraSize.width() < m_image.w || cameraSize.height() < m_image.h) {
+			continue;
+		}
+		if (cameraSize.width() <= size.width() && cameraSize.height() <= size.height()) {
+			size = cameraSize;
+		}
+	}
+	settings.setResolution(size);
+	auto cameraFormats = m_camera->supportedViewfinderPixelFormats(settings);
+	auto goodFormats = m_videoDumper.supportedPixelFormats();
+	bool goodFormatFound = false;
+	for (auto& goodFormat : goodFormats) {
+		if (cameraFormats.contains(goodFormat)) {
+			settings.setPixelFormat(goodFormat);
+			format = goodFormat;
+			goodFormatFound = true;
+			break;
+		}
+	}
+	if (!goodFormatFound) {
+		LOG(QT, WARN) << "Could not find a valid camera format!";
+	}
+	m_camera->setViewfinderSettings(settings);
+#endif
+	m_camera->setCaptureMode(QCamera::CaptureVideo);
+	m_camera->setViewfinder(&m_videoDumper);
+	m_camera->start();
+#endif
+}
+
+void InputController::teardownCam() {
+#ifdef BUILD_QT_MULTIMEDIA
+	if (m_camera) {
+		m_camera->stop();
+		m_camera.reset();
+	}
+#endif
 }

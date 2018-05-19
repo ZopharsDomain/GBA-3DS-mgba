@@ -5,15 +5,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "ConfigController.h"
 
-#include "GameController.h"
+#include "CoreController.h"
 
 #include <QAction>
 #include <QDir>
 #include <QMenu>
 
-extern "C" {
-#include "feature/commandline.h"
-}
+#include <mgba/feature/commandline.h>
 
 using namespace QGBA;
 
@@ -78,33 +76,30 @@ void ConfigOption::setValue(const char* value) {
 }
 
 void ConfigOption::setValue(const QVariant& value) {
-	QPair<QAction*, QVariant> action;
-	foreach (action, m_actions) {
+	for (QPair<QAction*, QVariant>& action : m_actions) {
 		bool signalsEnabled = action.first->blockSignals(true);
 		action.first->setChecked(value == action.second);
 		action.first->blockSignals(signalsEnabled);
 	}
-	std::function<void(const QVariant&)> slot;
-	foreach(slot, m_slots.values()) {
+	for (std::function<void(const QVariant&)>& slot : m_slots.values()) {
 		slot(value);
 	}
 }
 
+QString ConfigController::s_configDir;
+
 ConfigController::ConfigController(QObject* parent)
 	: QObject(parent)
-	, m_opts()
 {
-	char path[PATH_MAX];
-	mCoreConfigDirectory(path, sizeof(path));
-	QString fileName(path);
+	QString fileName = configDir();
 	fileName.append(QDir::separator());
 	fileName.append("qt.ini");
 	m_settings = new QSettings(fileName, QSettings::IniFormat, this);
 
 	mCoreConfigInit(&m_config, PORT);
 
-	m_opts.audioSync = GameController::AUDIO_SYNC;
-	m_opts.videoSync = GameController::VIDEO_SYNC;
+	m_opts.audioSync = CoreController::AUDIO_SYNC;
+	m_opts.videoSync = CoreController::VIDEO_SYNC;
 	m_opts.fpsTarget = 60;
 	m_opts.audioBuffers = 1536;
 	m_opts.sampleRate = 44100;
@@ -112,6 +107,7 @@ ConfigController::ConfigController(QObject* parent)
 	m_opts.logLevel = mLOG_WARN | mLOG_ERROR | mLOG_FATAL;
 	m_opts.rewindEnable = false;
 	m_opts.rewindBufferCapacity = 300;
+	m_opts.rewindSave = true;
 	m_opts.useBios = true;
 	m_opts.suspendScreensaver = true;
 	m_opts.lockAspectRatio = true;
@@ -162,8 +158,16 @@ void ConfigController::updateOption(const char* key) {
 	m_optionSet[optionName]->setValue(mCoreConfigGetValue(&m_config, key));
 }
 
-QString ConfigController::getOption(const char* key) const {
-	return QString(mCoreConfigGetValue(&m_config, key));
+QString ConfigController::getOption(const char* key, const QVariant& defaultVal) const {
+	const char* val = mCoreConfigGetValue(&m_config, key);
+	if (val) {
+		return QString(val);
+	}
+	return defaultVal.toString();
+}
+
+QString ConfigController::getOption(const QString& key, const QVariant& defaultVal) const {
+	return getOption(key.toUtf8().constData(), defaultVal);
 }
 
 QVariant ConfigController::getQtOption(const QString& key, const QString& group) const {
@@ -271,9 +275,7 @@ void ConfigController::write() {
 void ConfigController::makePortable() {
 	mCoreConfigMakePortable(&m_config);
 
-	char path[PATH_MAX];
-	mCoreConfigDirectory(path, sizeof(path));
-	QString fileName(path);
+	QString fileName(configDir());
 	fileName.append(QDir::separator());
 	fileName.append("qt.ini");
 	QSettings* settings2 = new QSettings(fileName, QSettings::IniFormat, this);
@@ -282,4 +284,13 @@ void ConfigController::makePortable() {
 	}
 	delete m_settings;
 	m_settings = settings2;
+}
+
+const QString& ConfigController::configDir() {
+	if (s_configDir.isNull()) {
+		char path[PATH_MAX];
+		mCoreConfigDirectory(path, sizeof(path));
+		s_configDir = QString::fromUtf8(path);
+	}
+	return s_configDir;
 }

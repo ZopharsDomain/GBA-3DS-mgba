@@ -5,9 +5,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "main.h"
 
-#include "core/thread.h"
-#include "core/version.h"
-#include "util/arm-algo.h"
+#include <mgba/core/core.h>
+#include <mgba/core/thread.h>
+#include <mgba/core/version.h>
+#include <mgba-util/arm-algo.h>
 
 static bool mSDLSWInit(struct mSDLRenderer* renderer);
 static void mSDLSWRunloop(struct mSDLRenderer* renderer, void* user);
@@ -92,12 +93,12 @@ void mSDLSWRunloop(struct mSDLRenderer* renderer, void* user) {
 	SDL_Surface* surface = SDL_GetVideoSurface();
 #endif
 
-	while (context->state < THREAD_EXITING) {
+	while (mCoreThreadIsActive(context)) {
 		while (SDL_PollEvent(&event)) {
 			mSDLHandleEvent(context, &renderer->player, &event);
 		}
 
-		if (mCoreSyncWaitFrameStart(&context->sync)) {
+		if (mCoreSyncWaitFrameStart(&context->impl->sync)) {
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 			SDL_UnlockTexture(renderer->sdlTex);
 			SDL_RenderCopy(renderer->sdlRenderer, renderer->sdlTex, 0, 0);
@@ -133,7 +134,7 @@ void mSDLSWRunloop(struct mSDLRenderer* renderer, void* user) {
 			SDL_LockSurface(surface);
 #endif
 		}
-		mCoreSyncWaitFrameEnd(&context->sync);
+		mCoreSyncWaitFrameEnd(&context->impl->sync);
 	}
 }
 
